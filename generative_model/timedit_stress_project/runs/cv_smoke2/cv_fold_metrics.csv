@@ -1,0 +1,3 @@
+fold,best_epoch,best_val_loss,n_train_days,n_val_days,model_bundle,holdout_real_csv,training_history_csv
+1,1,1.8956405520439148,25,25,runs/cv_smoke2/fold_01/model_bundle.pt,runs/cv_smoke2/fold_01/holdout_real.csv,runs/cv_smoke2/fold_01/training_history.csv
+2,1,2.2328474521636963,25,25,runs/cv_smoke2/fold_02/model_bundle.pt,runs/cv_smoke2/fold_02/holdout_real.csv,runs/cv_smoke2/fold_02/training_history.csv

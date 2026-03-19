@@ -1,0 +1,19 @@
+[DONE] Wrote demo data to demo_data.csv
+[INFO] Using device: cpu
+[INFO] Output directory: runs/smoke
+[INFO] Loaded 4,800 rows across 50 complete days.
+Epoch 1/2:   0%|          | 0/3 [00:00<?, ?it/s]Epoch 1/2:   0%|          | 0/3 [00:00<?, ?it/s, loss=1.6563]Epoch 1/2:   0%|          | 0/3 [00:00<?, ?it/s, loss=1.5503]Epoch 1/2:  67%|██████▋   | 2/3 [00:00<00:00, 17.29it/s, loss=1.5503]Epoch 1/2:  67%|██████▋   | 2/3 [00:00<00:00, 17.29it/s, loss=1.3673]                                                                     [INFO] Epoch 001 | train_loss=1.524635 | val_loss=1.482136
+Epoch 2/2:   0%|          | 0/3 [00:00<?, ?it/s]Epoch 2/2:   0%|          | 0/3 [00:00<?, ?it/s, loss=1.0495]Epoch 2/2:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.9529]Epoch 2/2:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.8709]                                                             [INFO] Epoch 002 | train_loss=0.957772 | val_loss=0.746425
+[DONE] Best epoch: 2, best val loss: 0.746425
+[DONE] Saved bundle to: runs/smoke/model_bundle.pt
+[DONE] Generated 3 days for scenario=mainB
+[DONE] Data CSV: runs/smoke/generated_mainB.csv
+[DONE] Metadata CSV: runs/smoke/generated_mainB_meta.csv
+[DONE] Generated 3 days for scenario=stressA
+[DONE] Data CSV: runs/smoke/generated_stressA.csv
+[DONE] Metadata CSV: runs/smoke/generated_stressA_meta.csv
+[RUN] python make_demo_data.py --output demo_data.csv --n-days 50 --seed 11
+[RUN] python train.py --config configs/smoke.yaml --csv-path demo_data.csv --output-dir runs/smoke
+[RUN] python generate.py --bundle runs/smoke/model_bundle.pt --scenario mainB --n-days 3 --output-path runs/smoke/generated_mainB.csv --metadata-path runs/smoke/generated_mainB_meta.csv --seed 11
+[RUN] python generate.py --bundle runs/smoke/model_bundle.pt --scenario stressA --n-days 3 --output-path runs/smoke/generated_stressA.csv --metadata-path runs/smoke/generated_stressA_meta.csv --seed 12
+[DONE] Smoke test completed.

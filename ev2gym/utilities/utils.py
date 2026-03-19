@@ -490,26 +490,14 @@ def EV_spawner(env) -> List[EV]:
                 time = time + datetime.timedelta(minutes=env.timescale)
                 continue
             else:
-                # tau = env.df_arrival_week[scenario].iloc[i]
-                from ev2gym.utilities.generated_data_path import data_path
-                import pandas as pd
-                
-                df = pd.read_csv(data_path)
-                tau = df.iloc[i]['lambda']
-                # print(f"week_tau: {tau}")
+                tau = env.df_arrival_week[scenario].iloc[i]
                 multiplier = 1  # 10
         else:
             if scenario == "workplace":
                 time = time + datetime.timedelta(minutes=env.timescale)
                 continue
             else:
-                # tau = env.df_arrival_weekend[scenario].iloc[i]
-                from ev2gym.utilities.generated_data_path import data_path
-                import pandas as pd
-                
-                df = pd.read_csv(data_path)
-                tau = df.iloc[i]['lambda']
-                # print(f"weekend_tau: {tau}")
+                tau = env.df_arrival_weekend[scenario].iloc[i]
 
             if day == 5:
                 multiplier = 1  # 8

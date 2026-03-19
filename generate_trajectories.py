@@ -12,10 +12,7 @@ from ev2gym.utilities.arg_parser import arg_parser
 from ev2gym.rl_agent.reward import SquaredTrackingErrorReward, ProfitMax_TrPenalty_UserIncentives, profit_maximization, SimpleReward
 from ev2gym.rl_agent.state import V2G_profit_max, PublicPST, V2G_profit_max_loads
 from ev2gym.baselines.heuristics import RandomAgent, RoundRobin_GF, ChargeAsFastAsPossible
-#from ev2gym.baselines.gurobi_models.PST_V2G_profit_max_mo import mo_PST_V2GProfitMaxOracleGB #--dataset里面如果是optimal就取消注释
-from utils import PST_V2G_ProfitMax_reward, PST_V2G_ProfitMaxGNN_state, PST_V2G_ProfitMax_state
-
-#from ev2gym.baselines.mpc.eMPC_v2 import eMPC_V2G_v2   # --dataset里面如果是mpc就取消注释,不然要gurobi
+from utils import PST_V2G_ProfitMax_reward, PST_V2G_ProfitMax_state
 
 import pandas as pd
 
@@ -24,29 +21,23 @@ if __name__ == "__main__":
     args = arg_parser()
     SAVE_EVAL_REPLAYS = args.save_eval_replays
 
-    if args.env == "25":
-        args.config_file = "./config_files/PST_V2G_ProfixMax_25_genAI.yaml"
-    elif args.env == "250":
-        args.config_file = "./config_files/PST_V2G_ProfixMax_250.yaml"
-    else:
-        raise ValueError(f"Environment {args.env} not supported")
-
     reward_function = PST_V2G_ProfitMax_reward
     state_function = PST_V2G_ProfitMax_state
     problem = args.config_file.split("/")[-1].split(".")[0]
-
 
 
     env = EV2Gym(config_file=args.config_file,
                  state_function=state_function,
                  reward_function=reward_function,
                  save_replay=SAVE_EVAL_REPLAYS,
+                 use_generated=args.use_generated
                  )
 
     temp_env = EV2Gym(config_file=args.config_file,
                       save_replay=True,
                       reward_function=reward_function,
                       state_function=state_function,
+                      use_generated=args.use_generated
                       )
 
     n_trajectories = args.n_trajectories
@@ -120,6 +111,7 @@ if __name__ == "__main__":
                 agent = RoundRobin_GF(env)
 
         elif trajecotries_type == "optimal":
+            from ev2gym.baselines.gurobi_models.PST_V2G_profit_max_mo import mo_PST_V2GProfitMaxOracleGB
             _, _ = temp_env.reset()
             agent = ChargeAsFastAsPossible()
 
@@ -132,23 +124,20 @@ if __name__ == "__main__":
 
             new_replay_path = f"./replay/replay_{temp_env.sim_name}.pkl"
 
-            if args.env == "25":
-                timelimit = 60
-
-            elif args.env == "250":
-                timelimit = 180
+            timelimit = 180
 
             agent = mo_PST_V2GProfitMaxOracleGB(new_replay_path,
                                                 timelimit=timelimit,
                                                 MIPGap=None,
                                                 )
 
-        # elif trajecotries_type == "mpc":
-        #     agent = eMPC_V2G_v2(env,
-        #                         control_horizon=10,
-        #                         MIPGap=0.1,
-        #                         time_limit=30,
-        #                         verbose=False)
+        elif trajecotries_type == "mpc":
+            from ev2gym.baselines.mpc.eMPC_v2 import eMPC_V2G_v2
+            agent = eMPC_V2G_v2(env,
+                                control_horizon=10,
+                                MIPGap=0.1,
+                                time_limit=30,
+                                verbose=False)
         else:
             raise ValueError(
                 f"Trajectories type {trajecotries_type} not supported")
@@ -225,4 +214,9 @@ if __name__ == "__main__":
         with gzip.open(save_folder_path+file_name+".gz", 'rb') as f:
             loaded_data = pickle.load(f)
 
-        print(loaded_data)
+        #print(loaded_data)
+        print(loaded_data[0]["observations"].shape)
+        print(loaded_data[0]["actions"].shape)
+        print(loaded_data[0]["rewards"].shape)
+        print(loaded_data[0]["dones"].shape)
+        print(loaded_data[0]["action_mask"].shape)

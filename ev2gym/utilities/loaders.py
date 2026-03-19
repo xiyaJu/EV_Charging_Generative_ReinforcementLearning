@@ -16,7 +16,6 @@ from ev2gym.models.transformer import Transformer
 
 from ev2gym.utilities.utils import EV_spawner, generate_power_setpoints, EV_spawner_GF
 
-from ev2gym.utilities.generated_data_path import data_path
 
 def load_ev_spawn_scenarios(env) -> None:
     '''Loads the EV spawn scenarios of the simulation'''
@@ -99,187 +98,126 @@ def load_power_setpoints(env) -> np.ndarray:
     else:
         return generate_power_setpoints(env)
 
+
 def generate_residential_inflexible_loads(env) -> np.ndarray:
     '''
     This function loads the inflexible loads of each transformer
     in the simulation.
     '''
-    if not hasattr(env, 'load_data') or env.load_data is None:
-        load_df = pd.read_csv(data_path, sep=',', header=0, usecols=['load'])
-        env.load_data = load_df['load'].values
 
-    if len(env.load_data) < env.simulation_length:
-        raise ValueError(f"刚性负载数据文件行数({len(env.load_data)})小于仿真时长({env.simulation_length})，时间步不匹配！")
+    # Load the data
+    data_path = pkg_resources.resource_filename(
+        'ev2gym', 'data/residential_loads.csv')
+    data = pd.read_csv(data_path, header=None)
 
-    number_of_transformers = env.number_of_transformers
+    desired_timescale = env.timescale
     simulation_length = env.simulation_length
+    simulation_date = env.sim_starting_date.strftime('%Y-%m-%d %H:%M:%S')
+    number_of_transformers = env.number_of_transformers
 
-    inflexible_loads = np.zeros((number_of_transformers, simulation_length))
-    # 为每台变压器赋值基础load数据（保持维度匹配，若需差异化可在此扩展）
-    # 原函数采样求和的逻辑因数据源变化删除，默认所有变压器使用相同load数据（贴合新数据源特性）
+    dataset_timescale = 15
+    dataset_starting_date = '2022-01-01 00:00:00'
+
+    if desired_timescale > dataset_timescale:
+        data = data.groupby(
+            data.index // (desired_timescale/dataset_timescale)).max()
+    elif desired_timescale < dataset_timescale:
+        # extend the dataset to data.shape[0] * (dataset_timescale/desired_timescale)
+        # by repeating the data every (dataset_timescale/desired_timescale) rows
+        data = data.loc[data.index.repeat(
+            dataset_timescale/desired_timescale)].reset_index(drop=True)
+
+    # duplicate the data to have two years of data
+    data = pd.concat([data, data], ignore_index=True)
+
+    # add a date column to the dataframe
+    data['date'] = pd.date_range(
+        start=dataset_starting_date, periods=data.shape[0], freq=f'{desired_timescale}min')
+
+    # find year of the data
+    year = int(dataset_starting_date.split('-')[0])
+    # replace the year of the simulation date with the year of the data
+    simulation_date = f'{year}-{simulation_date.split("-")[1]}-{simulation_date.split("-")[2]}'
+
+    simulation_index = data[data['date'] == simulation_date].index[0]
+
+    # select the data for the simulation date
+    data = data[simulation_index:simulation_index+simulation_length]
+
+    # drop the date column
+    data = data.drop(columns=['date'])
+    new_data = pd.DataFrame()
+
     for i in range(number_of_transformers):
-        for j in range(simulation_length):
-            if env.load_data[j] > 0:
-                inflexible_loads[i, j] = env.load_data[j]
-            else:
-                inflexible_loads[i, j] = 0
+        new_data['tr_'+str(i)] = data.sample(10, axis=1,
+                                             random_state=env.tr_seed).sum(axis=1)
 
-    return inflexible_loads
+    # return the "tr_" columns
+    return new_data.to_numpy().T
 
-# def generate_residential_inflexible_loads(env) -> np.ndarray:
-#     '''
-#     This function loads the inflexible loads of each transformer
-#     in the simulation.
-#     '''
-#     # Load the data
-#     data_path = pkg_resources.resource_filename(
-#         'ev2gym', 'data/residential_loads.csv')
-#     data = pd.read_csv(data_path, header=None)
-
-#     desired_timescale = env.timescale
-#     simulation_length = env.simulation_length
-#     simulation_date = env.sim_starting_date.strftime('%Y-%m-%d %H:%M:%S')
-#     number_of_transformers = env.number_of_transformers
-
-#     dataset_timescale = 15
-#     dataset_starting_date = '2022-01-01 00:00:00'
-
-#     if desired_timescale > dataset_timescale:
-#         data = data.groupby(
-#             data.index // (desired_timescale/dataset_timescale)).max()
-#     elif desired_timescale < dataset_timescale:
-#         # extend the dataset to data.shape[0] * (dataset_timescale/desired_timescale)
-#         # by repeating the data every (dataset_timescale/desired_timescale) rows
-#         data = data.loc[data.index.repeat(
-#             dataset_timescale/desired_timescale)].reset_index(drop=True)
-
-#     # duplicate the data to have two years of data
-#     data = pd.concat([data, data], ignore_index=True)
-
-#     # add a date column to the dataframe
-#     data['date'] = pd.date_range(
-#         start=dataset_starting_date, periods=data.shape[0], freq=f'{desired_timescale}min')
-
-#     # find year of the data
-#     year = int(dataset_starting_date.split('-')[0])
-#     # replace the year of the simulation date with the year of the data
-#     simulation_date = f'{year}-{simulation_date.split("-")[1]}-{simulation_date.split("-")[2]}'
-
-#     simulation_index = data[data['date'] == simulation_date].index[0]
-
-#     # select the data for the simulation date
-#     data = data[simulation_index:simulation_index+simulation_length]
-
-#     # drop the date column
-#     data = data.drop(columns=['date'])
-#     new_data = pd.DataFrame()
-
-#     for i in range(number_of_transformers):
-#         new_data['tr_'+str(i)] = data.sample(10, axis=1,
-#                                              random_state=env.tr_seed).sum(axis=1)
-
-#     # return the "tr_" columns
-#     return new_data.to_numpy().T
 
 def generate_pv_generation(env) -> np.ndarray:
     '''
-    This function loads the PV generation of each transformer by loading the data from generated file
+    This function loads the PV generation of each transformer by loading the data from a file
     and then adding minor variations to the data
     '''
-    if not hasattr(env, 'pv_data') or env.pv_data is None:
-        file_path = data_path
-        # 仅读取pv列，忽略其他无关字段，提升效率
-        pv_df = pd.read_csv(file_path, sep=',', header=0, usecols=['pv'])
-        # 转换为一维numpy数组，方便后续按仿真步索引（行号=仿真时间步）
-        env.pv_data = pv_df['pv'].values
 
-    # 关键校验：确保PV数据行数 ≥ 仿真时长，避免索引越界（保证鲁棒性）
-    if len(env.pv_data) < env.simulation_length:
-        raise ValueError(f"PV数据文件行数({len(env.pv_data)})小于仿真时长({env.simulation_length})，时间步不匹配！")
+    # Load the data
+    data_path = pkg_resources.resource_filename(
+        'ev2gym', 'data/pv_netherlands.csv')
+    data = pd.read_csv(data_path, sep=',', header=0)
+    data.drop(['time', 'local_time'], inplace=True, axis=1)
 
-    # 提取仿真核心配置（与原函数一致，无修改）
-    number_of_transformers = env.number_of_transformers
+    desired_timescale = env.timescale
     simulation_length = env.simulation_length
+    simulation_date = env.sim_starting_date.strftime('%Y-%m-%d %H:%M:%S')
+    number_of_transformers = env.number_of_transformers
 
-    # 初始化PV发电量矩阵（numpy更高效，维度与原函数输出一致）
-    # 维度：(变压器数量, 仿真时长)，提前初始化避免多次拼接
-    pv_generation = np.zeros((number_of_transformers, simulation_length))
+    dataset_timescale = 60
+    dataset_starting_date = '2019-01-01 00:00:00'
 
-    # 核心逻辑保留：为每台变压器生成带微小差异的PV数据
-    # 0.9~1.1随机系数，模拟实际光伏组件性能微小差异，使用env随机数生成器保证可复现
+    if desired_timescale > dataset_timescale:
+        data = data.groupby(
+            data.index // (desired_timescale/dataset_timescale)).max()
+    elif desired_timescale < dataset_timescale:
+        # extend the dataset to data.shape[0] * (dataset_timescale/desired_timescale)
+        # by repeating the data every (dataset_timescale/desired_timescale) rows
+        data = data.loc[data.index.repeat(
+            dataset_timescale/desired_timescale)].reset_index(drop=True)
+        # data = data/ (dataset_timescale/desired_timescale)
+
+    # smooth data by taking the mean of every 5 rows
+    data['electricity'] = data['electricity'].rolling(
+        window=60//desired_timescale, min_periods=1).mean()
+    # use other type of smoothing
+    data['electricity'] = data['electricity'].ewm(
+        span=60//desired_timescale, adjust=True).mean()
+
+    # duplicate the data to have two years of data
+    data = pd.concat([data, data], ignore_index=True)
+
+    # add a date column to the dataframe
+    data['date'] = pd.date_range(
+        start=dataset_starting_date, periods=data.shape[0], freq=f'{desired_timescale}min')
+
+    # find year of the data
+    year = int(dataset_starting_date.split('-')[0])
+    # replace the year of the simulation date with the year of the data
+    simulation_date = f'{year}-{simulation_date.split("-")[1]}-{simulation_date.split("-")[2]}'
+
+    simulation_index = data[data['date'] == simulation_date].index[0]
+
+    # select the data for the simulation date
+    data = data[simulation_index:simulation_index+simulation_length]
+
+    # drop the date column
+    data = data.drop(columns=['date'])
+    new_data = pd.DataFrame()
+
     for i in range(number_of_transformers):
-        # 为每个变压器生成独立的随机系数，基础PV数据乘以系数实现差异化
-        random_factor = env.tr_rng.uniform(0.9, 1.1)
-        pv_generation[i, :] = env.pv_data[:simulation_length] * random_factor
+        new_data['tr_'+str(i)] = data * env.tr_rng.uniform(0.9, 1.1)
 
-    # 返回格式：(变压器数量, 仿真时长)的numpy数组
-    return pv_generation
-
-# def generate_pv_generation(env) -> np.ndarray:
-#     '''
-#     This function loads the PV generation of each transformer by loading the data from a file
-#     and then adding minor variations to the data
-#     '''
-
-#     # Load the data
-#     data_path = pkg_resources.resource_filename(
-#         'ev2gym', 'data/pv_netherlands.csv')
-#     data = pd.read_csv(data_path, sep=',', header=0)
-#     data.drop(['time', 'local_time'], inplace=True, axis=1)
-
-#     desired_timescale = env.timescale
-#     # print(f"desired_timescale: {desired_timescale}")
-#     simulation_length = env.simulation_length
-#     # print(f"simulation_length: {simulation_length}")
-#     simulation_date = env.sim_starting_date.strftime('%Y-%m-%d %H:%M:%S')
-#     number_of_transformers = env.number_of_transformers
-
-#     dataset_timescale = 60
-#     dataset_starting_date = '2019-01-01 00:00:00'
-
-#     if desired_timescale > dataset_timescale:
-#         data = data.groupby(
-#             data.index // (desired_timescale/dataset_timescale)).max()
-#     elif desired_timescale < dataset_timescale:
-#         # extend the dataset to data.shape[0] * (dataset_timescale/desired_timescale)
-#         # by repeating the data every (dataset_timescale/desired_timescale) rows
-#         data = data.loc[data.index.repeat(
-#             dataset_timescale/desired_timescale)].reset_index(drop=True)
-#         # data = data/ (dataset_timescale/desired_timescale)
-
-#     # smooth data by taking the mean of every 5 rows
-#     data['electricity'] = data['electricity'].rolling(
-#         window=60//desired_timescale, min_periods=1).mean()
-#     # use other type of smoothing
-#     data['electricity'] = data['electricity'].ewm(
-#         span=60//desired_timescale, adjust=True).mean()
-
-#     # duplicate the data to have two years of data
-#     data = pd.concat([data, data], ignore_index=True)
-
-#     # add a date column to the dataframe
-#     data['date'] = pd.date_range(
-#         start=dataset_starting_date, periods=data.shape[0], freq=f'{desired_timescale}min')
-
-#     # find year of the data
-#     year = int(dataset_starting_date.split('-')[0])
-#     # replace the year of the simulation date with the year of the data
-#     simulation_date = f'{year}-{simulation_date.split("-")[1]}-{simulation_date.split("-")[2]}'
-
-#     simulation_index = data[data['date'] == simulation_date].index[0]
-
-#     # select the data for the simulation date
-#     data = data[simulation_index:simulation_index+simulation_length]
-
-#     # drop the date column
-#     data = data.drop(columns=['date'])
-#     new_data = pd.DataFrame()
-
-#     for i in range(number_of_transformers):
-#         new_data['tr_'+str(i)] = data * env.tr_rng.uniform(0.9, 1.1)
-
-
-#     return new_data.to_numpy().T
+    return new_data.to_numpy().T
 
 
 def load_transformers(env) -> List[Transformer]:
@@ -289,13 +227,17 @@ def load_transformers(env) -> List[Transformer]:
     Returns:
         - transformers: a list of transformer objects
     '''
+
     if env.load_from_replay_path is not None:
         return env.replay.transformers
 
     transformers = []
+
     if env.config['inflexible_loads']['include']:
+
         if env.scenario == 'private':
             inflexible_loads = generate_residential_inflexible_loads(env)
+
         # TODO add inflexible loads for public and workplace scenarios
         else:
             inflexible_loads = generate_residential_inflexible_loads(env)
@@ -442,77 +384,6 @@ def load_ev_profiles(env) -> List[EV]:
     else:
         return env.replay.EVs
 
-# def load_electricity_prices(env) -> Tuple[np.ndarray, np.ndarray]:
-#     '''Loads the electricity prices of the simulation
-#     If load_from_replay_path is None, then the electricity prices are created randomly
-
-#     Returns:
-#         - charge_prices: a matrix of size (number of charging stations, simulation length) with the charge prices
-#         - discharge_prices: a matrix of size (number of charging stations, simulation length) with the discharge prices'''
-
-#     if env.load_from_replay_path is not None:
-#         return env.replay.charge_prices, env.replay.discharge_prices
-
-#     if env.price_data is None:
-#         # else load historical prices
-#         file_path = pkg_resources.resource_filename(
-#             'ev2gym', 'data/Netherlands_day-ahead-2015-2023.csv')
-#         env.price_data = pd.read_csv(file_path, sep=',', header=0)
-#         # import polars as pl
-#         # env.price_data = pl.read_csv(file_path).to_pandas()
-
-#         drop_columns = ['Country', 'Datetime (Local)']
-
-#         env.price_data.drop(drop_columns, inplace=True, axis=1)
-#         env.price_data['year'] = pd.DatetimeIndex(
-#             env.price_data['Datetime (UTC)']).year
-#         env.price_data['month'] = pd.DatetimeIndex(
-#             env.price_data['Datetime (UTC)']).month
-#         env.price_data['day'] = pd.DatetimeIndex(
-#             env.price_data['Datetime (UTC)']).day
-#         env.price_data['hour'] = pd.DatetimeIndex(
-#             env.price_data['Datetime (UTC)']).hour
-
-#     # assume charge and discharge prices are the same
-#     # assume prices are the same for all charging stations
-
-#     data = env.price_data
-#     charge_prices = np.zeros((env.cs, env.simulation_length))
-#     discharge_prices = np.zeros((env.cs, env.simulation_length))
-#     # for every simulation step, take the price of the corresponding hour
-#     sim_temp_date = env.sim_date
-#     for i in range(env.simulation_length):
-
-#         year = sim_temp_date.year
-#         month = sim_temp_date.month
-#         day = sim_temp_date.day
-#         hour = sim_temp_date.hour
-#         # find the corresponding price
-#         try:
-#             charge_prices[:, i] = -data.loc[(data['year'] == year) & (data['month'] == month) & (data['day'] == day) & (data['hour'] == hour),
-#                                             'Price (EUR/MWhe)'].iloc[0]/1000  # €/kWh
-#             discharge_prices[:, i] = data.loc[(data['year'] == year) & (data['month'] == month) & (data['day'] == day) & (data['hour'] == hour),
-#                                               'Price (EUR/MWhe)'].iloc[0]/1000  # €/kWh
-#         except:
-#             print(
-#                 'Error: no price found for the given date and hour. Using 2022 prices instead.')
-
-#             year = 2022
-#             if day > 28:
-#                 day -= 1
-#             # print("Debug:", year, month, day, hour)
-#             charge_prices[:, i] = -data.loc[(data['year'] == year) & (data['month'] == month) & (data['day'] == day) & (data['hour'] == hour),
-#                                             'Price (EUR/MWhe)'].iloc[0]/1000  # €/kWh
-#             discharge_prices[:, i] = data.loc[(data['year'] == year) & (data['month'] == month) & (data['day'] == day) & (data['hour'] == hour),
-#                                               'Price (EUR/MWhe)'].iloc[0]/1000  # €/kWh
-
-#         # step to next
-#         sim_temp_date = sim_temp_date + \
-#             datetime.timedelta(minutes=env.timescale)
-
-#     discharge_prices = discharge_prices * env.config['discharge_price_factor']
-#     return charge_prices, discharge_prices
-
 def load_electricity_prices(env) -> Tuple[np.ndarray, np.ndarray]:
     '''Loads the electricity prices of the simulation
     If load_from_replay_path is None, then the electricity prices are created randomly
@@ -525,26 +396,64 @@ def load_electricity_prices(env) -> Tuple[np.ndarray, np.ndarray]:
         return env.replay.charge_prices, env.replay.discharge_prices
 
     if env.price_data is None:
-        # 这里的文件路径在生成不同轨迹的时候记得修改，每个文件就是一天的数据
-        file_path = data_path
-        env.price_data = pd.read_csv(file_path, sep=',', header=0, usecols=['price'])
-        env.price_data = env.price_data['price'].values
+        # else load historical prices
+        file_path = pkg_resources.resource_filename(
+            'ev2gym', 'data/Netherlands_day-ahead-2015-2023.csv')
+        env.price_data = pd.read_csv(file_path, sep=',', header=0)
+        # import polars as pl
+        # env.price_data = pl.read_csv(file_path).to_pandas()
 
-    # 确保文件行数 ≥ 仿真时长，避免索引越界
-    if len(env.price_data) < env.simulation_length:
-        raise ValueError(f"生成的价格文件行数({len(env.price_data)})小于仿真时长({env.simulation_length})，时间步不匹配！")
+        drop_columns = ['Country', 'Datetime (Local)']
 
+        env.price_data.drop(drop_columns, inplace=True, axis=1)
+        env.price_data['year'] = pd.DatetimeIndex(
+            env.price_data['Datetime (UTC)']).year
+        env.price_data['month'] = pd.DatetimeIndex(
+            env.price_data['Datetime (UTC)']).month
+        env.price_data['day'] = pd.DatetimeIndex(
+            env.price_data['Datetime (UTC)']).day
+        env.price_data['hour'] = pd.DatetimeIndex(
+            env.price_data['Datetime (UTC)']).hour
 
     # assume charge and discharge prices are the same
     # assume prices are the same for all charging stations
+
+    data = env.price_data
+
     
     charge_prices = np.zeros((env.cs, env.simulation_length))
     discharge_prices = np.zeros((env.cs, env.simulation_length))
+    # for every simulation step, take the price of the corresponding hour
+    sim_temp_date = env.sim_date
     for i in range(env.simulation_length):
-        base_price = env.price_data[i]
-        # 原逻辑保留：EUR/MWhe → €/kWh 单位转换
-        charge_prices[:, i] = -base_price / 1000
-        discharge_prices[:, i] = base_price / 1000  
+
+        year = sim_temp_date.year
+        month = sim_temp_date.month
+        day = sim_temp_date.day
+        hour = sim_temp_date.hour
+        # find the corresponding price
+        try:
+            charge_prices[:, i] = -data.loc[(data['year'] == year) & (data['month'] == month) & (data['day'] == day) & (data['hour'] == hour),
+                                            'Price (EUR/MWhe)'].iloc[0]/1000  # €/kWh
+            discharge_prices[:, i] = data.loc[(data['year'] == year) & (data['month'] == month) & (data['day'] == day) & (data['hour'] == hour),
+                                              'Price (EUR/MWhe)'].iloc[0]/1000  # €/kWh
+        except:
+            print(
+                'Error: no price found for the given date and hour. Using 2022 prices instead.')
+
+            year = 2022
+            if day > 28:
+                day -= 1
+            # print("Debug:", year, month, day, hour)
+            charge_prices[:, i] = -data.loc[(data['year'] == year) & (data['month'] == month) & (data['day'] == day) & (data['hour'] == hour),
+                                            'Price (EUR/MWhe)'].iloc[0]/1000  # €/kWh
+            discharge_prices[:, i] = data.loc[(data['year'] == year) & (data['month'] == month) & (data['day'] == day) & (data['hour'] == hour),
+                                              'Price (EUR/MWhe)'].iloc[0]/1000  # €/kWh
+
+        # step to next
+        sim_temp_date = sim_temp_date + \
+            datetime.timedelta(minutes=env.timescale)
 
     discharge_prices = discharge_prices * env.config['discharge_price_factor']
     return charge_prices, discharge_prices
+

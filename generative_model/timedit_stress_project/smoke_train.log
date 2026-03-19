@@ -1,0 +1,7 @@
+[INFO] Using device: cpu
+[INFO] Output directory: runs/smoke_debug
+[INFO] Loaded 4,800 rows across 50 complete days.
+Epoch 1/2:   0%|          | 0/3 [00:00<?, ?it/s]Epoch 1/2:   0%|          | 0/3 [00:00<?, ?it/s, loss=1.6563]Epoch 1/2:   0%|          | 0/3 [00:00<?, ?it/s, loss=1.5503]Epoch 1/2:  67%|██████▋   | 2/3 [00:00<00:00, 17.70it/s, loss=1.5503]Epoch 1/2:  67%|██████▋   | 2/3 [00:00<00:00, 17.70it/s, loss=1.3673]                                                                     [INFO] Epoch 001 | train_loss=1.524635 | val_loss=1.482136
+Epoch 2/2:   0%|          | 0/3 [00:00<?, ?it/s]Epoch 2/2:   0%|          | 0/3 [00:00<?, ?it/s, loss=1.0495]Epoch 2/2:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.9529]Epoch 2/2:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.8709]                                                             [INFO] Epoch 002 | train_loss=0.957772 | val_loss=0.746425
+[DONE] Best epoch: 2, best val loss: 0.746425
+[DONE] Saved bundle to: runs/smoke_debug/model_bundle.pt

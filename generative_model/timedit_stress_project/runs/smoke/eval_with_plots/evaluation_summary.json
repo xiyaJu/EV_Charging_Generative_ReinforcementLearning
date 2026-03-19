@@ -1,0 +1,39 @@
+{
+  "steps_per_day": 96,
+  "bundle_used": "runs/smoke/model_bundle.pt",
+  "real_csv": "demo_data.csv",
+  "synthetic_datasets": {
+    "mainB": "runs/smoke/generated_mainB.csv",
+    "stressA": "runs/smoke/generated_stressA.csv"
+  },
+  "n_real_days": 50,
+  "n_synthetic_days": {
+    "mainB": 3,
+    "stressA": 3
+  },
+  "notes": {
+    "discriminator_auc": "Closer to 0.5 is better; much larger than 0.5 means synthetic days are easy to distinguish from real days.",
+    "predictive_ratio": "Closer to 1.0 is better; values >1 mean training on synthetic hurts downstream next-step prediction relative to training on real.",
+    "nearest_neighbor": "Smaller means synthetic days are closer to some real day; extremely small values together with low diversity can indicate memorization risk.",
+    "stress_summary": "Compare mainB and stressA stress_score distributions to verify scenario separation."
+  },
+  "tables": {
+    "dataset_value_summary.csv": "runs/smoke/eval_with_plots/tables/dataset_value_summary.csv",
+    "distribution_comparison.csv": "runs/smoke/eval_with_plots/tables/distribution_comparison.csv",
+    "conditional_profile_comparison.csv": "runs/smoke/eval_with_plots/tables/conditional_profile_comparison.csv",
+    "conditional_profile_curves.csv": "runs/smoke/eval_with_plots/tables/conditional_profile_curves.csv",
+    "acf_comparison.csv": "runs/smoke/eval_with_plots/tables/acf_comparison.csv",
+    "acf_curves.csv": "runs/smoke/eval_with_plots/tables/acf_curves.csv",
+    "ramp_comparison.csv": "runs/smoke/eval_with_plots/tables/ramp_comparison.csv",
+    "correlation_matrix_comparison.csv": "runs/smoke/eval_with_plots/tables/correlation_matrix_comparison.csv",
+    "cross_correlation_comparison.csv": "runs/smoke/eval_with_plots/tables/cross_correlation_comparison.csv",
+    "cross_correlation_curves.csv": "runs/smoke/eval_with_plots/tables/cross_correlation_curves.csv",
+    "stress_summary.csv": "runs/smoke/eval_with_plots/tables/stress_summary.csv",
+    "scenario_target_control.csv": "runs/smoke/eval_with_plots/tables/scenario_target_control.csv",
+    "discriminator_metrics.csv": "runs/smoke/eval_with_plots/tables/discriminator_metrics.csv",
+    "memorization_diversity_metrics.csv": "runs/smoke/eval_with_plots/tables/memorization_diversity_metrics.csv",
+    "predictive_utility_overall.csv": "runs/smoke/eval_with_plots/tables/predictive_utility_overall.csv",
+    "predictive_utility_per_target.csv": "runs/smoke/eval_with_plots/tables/predictive_utility_per_target.csv",
+    "scenario_comparison.csv": "runs/smoke/eval_with_plots/tables/scenario_comparison.csv"
+  }
+}

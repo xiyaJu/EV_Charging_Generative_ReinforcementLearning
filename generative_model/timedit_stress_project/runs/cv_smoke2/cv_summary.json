@@ -1,0 +1,12 @@
+{
+  "n_folds": 2,
+  "split_mode": "blocked",
+  "config_path": "configs/smoke.yaml",
+  "csv_path": "demo_data.csv",
+  "mean_best_val_loss": 2.0642440021038055,
+  "std_best_val_loss": 0.16860345005989075,
+  "min_best_val_loss": 1.8956405520439148,
+  "max_best_val_loss": 2.2328474521636963,
+  "best_fold": 1,
+  "fold_metrics_csv": "runs/cv_smoke2/cv_fold_metrics.csv"
+}

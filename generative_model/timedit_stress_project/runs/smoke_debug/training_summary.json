@@ -1,0 +1,8 @@
+{
+  "best_epoch": 2,
+  "best_val_loss": 0.7464249134063721,
+  "n_days": 50,
+  "n_train_days": 42,
+  "n_val_days": 8,
+  "device": "cpu"
+}

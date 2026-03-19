@@ -18,8 +18,8 @@ import json
 # from .grid import Grid
 from ev2gym.models.replay import EvCityReplay
 from ev2gym.visuals.plots import ev_city_plot, visualize_step
-from ev2gym.utilities.utils import get_statistics, print_statistics, calculate_charge_power_potential
-from ev2gym.utilities.loaders import load_ev_spawn_scenarios, load_power_setpoints, load_transformers, load_ev_charger_profiles, load_ev_profiles, load_electricity_prices
+# from ev2gym.utilities.utils import get_statistics, print_statistics, calculate_charge_power_potential
+# from ev2gym.utilities.loaders import load_ev_spawn_scenarios, load_power_setpoints, load_transformers, load_ev_charger_profiles, load_ev_profiles, load_electricity_prices
 from ev2gym.visuals.render import Renderer
 
 from ev2gym.rl_agent.reward import SquaredTrackingErrorReward
@@ -46,9 +46,34 @@ class EV2Gym(gym.Env):
                  extra_sim_name=None,
                  verbose=False,
                  render_mode=None,
+                 use_generated=False,
                  ):
 
         super(EV2Gym, self).__init__()
+        
+        self.use_generated = use_generated
+        if use_generated:
+            from ev2gym.utilities.utils_gen import get_statistics, print_statistics, calculate_charge_power_potential
+            from ev2gym.utilities.loaders_gen import load_ev_spawn_scenarios, load_power_setpoints, load_transformers, load_ev_charger_profiles, load_ev_profiles, load_electricity_prices
+        else:
+            from ev2gym.utilities.utils import get_statistics, print_statistics, calculate_charge_power_potential
+            from ev2gym.utilities.loaders import load_ev_spawn_scenarios, load_power_setpoints, load_transformers, load_ev_charger_profiles, load_ev_profiles, load_electricity_prices
+
+        # 将函数绑定到实例，避免 reset 等方法出现 NameError
+        self._load_ev_profiles = load_ev_profiles
+        self._load_power_setpoints = load_power_setpoints
+        self._load_electricity_prices = load_electricity_prices
+        self._load_transformers = load_transformers
+        self._load_ev_charger_profiles = load_ev_charger_profiles
+        self._load_ev_spawn_scenarios = load_ev_spawn_scenarios
+        self._calculate_charge_power_potential = calculate_charge_power_potential
+        self._get_statistics = get_statistics
+
+
+
+        # ===================== 新增：初始化终端变量存储 =====================
+        self.scenario_step_data = []  # 存储每步终端变量
+        # ==================================================================
 
         if verbose:
             print(f'Initializing EV2Gym environment...')
@@ -107,7 +132,6 @@ class EV2Gym(gym.Env):
             self.scenario = self.replay.scenario
             self.heterogeneous_specs = self.replay.heterogeneous_specs
             self.optimal_stats = self.replay.optimal_stats
-            # print(f"@@@Loaded replay file: {load_from_replay_path}")
 
         else:
             assert cs is not None, "Please provide the number of charging stations"
@@ -203,12 +227,12 @@ class EV2Gym(gym.Env):
                 # random.shuffle(self.cs_transformers)
 
         # Instatiate Transformers
-        self.transformers = load_transformers(self)
+        self.transformers = self._load_transformers(self)
         for tr in self.transformers:
             tr.reset(step=0)
 
         # Instatiate Charging Stations
-        self.charging_stations = load_ev_charger_profiles(self)
+        self.charging_stations = self._load_ev_charger_profiles(self)
         for cs in self.charging_stations:
             cs.reset()
 
@@ -217,20 +241,21 @@ class EV2Gym(gym.Env):
             [cs.n_ports for cs in self.charging_stations]).sum()
 
         # Load EV spawn scenarios
+        self._load_ev_spawn_scenarios(self)
+
         if self.load_from_replay_path is None:
-            load_ev_spawn_scenarios(self)
+            self._load_ev_spawn_scenarios(self)
 
         # Spawn EVs
-        self.EVs_profiles = load_ev_profiles(self)
+        self.EVs_profiles = self._load_ev_profiles(self)
         self.EVs = []
 
         # Load Electricity prices for every charging station
         self.price_data = None
-        self.charge_prices, self.discharge_prices = load_electricity_prices(
-            self)
+        self.charge_prices, self.discharge_prices = self._load_electricity_prices(self)
 
         # Load power setpoint of simulation
-        self.power_setpoints = load_power_setpoints(self)
+        self.power_setpoints = self._load_power_setpoints(self) 
         self.current_power_usage = np.zeros(self.simulation_length)
         self.charge_power_potential = np.zeros(self.simulation_length)
 
@@ -270,8 +295,121 @@ class EV2Gym(gym.Env):
         # Observation mask: is a vector of size ("Sum of all ports of all charging stations") showing in which ports an EV is connected
         self.observation_mask = np.zeros(self.number_of_ports)
 
+    # ===================== 终极修复：收集终端变量方法（适配任意大小数组） =====================
+    def _collect_step_terminal_vars(self):
+        """提取当前步的核心终端变量（适配任意大小数组）"""
+        # 1. 基础环境信息
+        step_data = {
+            "sim_step": self.current_step,
+            "cs_count": self.cs,
+            "transformer_count": self.number_of_transformers,
+            "timescale_min": self.timescale,
+            "total_sim_steps": self.simulation_length,
+            "ports_per_cs": self.number_of_ports_per_cs,
+            
+            # 2. EV核心指标
+            "ev_in_field_count": len(self.EVs),  # 当前在场EV数量（lambda）
+            "ev_remaining_steps": [],
+            "ev_soc_demand_kwh": [],
+            
+            # 3. 变压器核心指标
+            "transformer_real_load_kw": [],
+            "transformer_capacity_kw": [],
+            "transformer_overload_ratio": [],
+            
+            # 4. 居民负荷（从变压器inflexible_load获取）
+            "residential_load_kw": 0.0,
+            
+            # 5. 电价/PV
+            "current_charge_price": 0.0,
+            "current_pv_power_kw": 0.0
+        }
+
+        # ========== 1. 计算居民负荷（适配任意数组） ==========
+        if self.transformers and self.current_step < self.simulation_length:
+            inflexible_loads = []
+            for tr in self.transformers:
+                if len(tr.inflexible_load) > self.current_step:
+                    # 处理任意大小数组：取当前步值（如果是数组）
+                    load_val = tr.inflexible_load[self.current_step] if isinstance(tr.inflexible_load, (np.ndarray, list)) else tr.inflexible_load
+                    # 确保是标量
+                    load_val = float(np.mean(load_val)) if isinstance(load_val, (np.ndarray, list)) else float(load_val)
+                    inflexible_loads.append(load_val)
+            step_data["residential_load_kw"] = float(np.mean(inflexible_loads)) if inflexible_loads else 0.0
+
+        # ========== 2. 计算当前电价（适配任意数组） ==========
+        if self.charging_stations and self.current_step < self.simulation_length:
+            charge_prices = []
+            for cs in self.charging_stations:
+                if cs.id < len(self.charge_prices) and self.current_step < len(self.charge_prices[cs.id]):
+                    price_val = self.charge_prices[cs.id, self.current_step]
+                    price_val = float(price_val) if np.isscalar(price_val) else float(np.mean(price_val))
+                    charge_prices.append(price_val)
+            step_data["current_charge_price"] = float(np.mean(charge_prices)) if charge_prices else 0.0
+
+        # ========== 3. 计算当前PV功率（适配任意数组） ==========
+        if self.transformers and self.current_step < self.simulation_length:
+            solar_powers = []
+            for tr in self.transformers:
+                if len(tr.solar_power) > self.current_step:
+                    pv_val = tr.solar_power[self.current_step] if isinstance(tr.solar_power, (np.ndarray, list)) else tr.solar_power
+                    pv_val = float(np.mean(pv_val)) if isinstance(pv_val, (np.ndarray, list)) else float(pv_val)
+                    solar_powers.append(pv_val)
+            step_data["current_pv_power_kw"] = float(np.mean(solar_powers)) if solar_powers else 0.0
+
+        # ========== 4. 填充EV详细指标 ==========
+        for ev in self.EVs:
+            # 剩余停留步数（防负数）
+            remaining_steps = max(0, getattr(ev, 'time_of_departure', self.current_step) - self.current_step)
+            step_data["ev_remaining_steps"].append(float(remaining_steps))
+            # SOC需求（目标-当前，防负数）
+            target_soc = getattr(ev, 'target_soc', 0)
+            current_capacity = getattr(ev, 'current_capacity', 0)
+            soc_demand = max(0, target_soc - current_capacity)
+            step_data["ev_soc_demand_kwh"].append(float(soc_demand))
+
+        # ========== 5. 填充变压器详细指标（终极修复：适配任意大小数组） ==========
+        for tr in self.transformers:
+            # 5.1 变压器实时负载 = 居民负荷 + 充电负荷（处理任意数组）
+            # 居民负荷
+            inflexible_load = tr.inflexible_load[self.current_step] if (isinstance(tr.inflexible_load, (np.ndarray, list)) and len(tr.inflexible_load) > self.current_step) else 0
+            inflexible_load = float(np.mean(inflexible_load)) if isinstance(inflexible_load, (np.ndarray, list)) else float(inflexible_load)
+            # 充电负荷
+            charging_load = getattr(tr, 'charging_load', 0)
+            charging_load = float(np.mean(charging_load)) if isinstance(charging_load, (np.ndarray, list)) else float(charging_load)
+            # 总负载
+            real_load = inflexible_load + charging_load
+            
+            # 5.2 变压器容量 = max_power（处理任意大小数组：取均值）
+            capacity = tr.max_power
+            capacity = float(np.mean(capacity)) if isinstance(capacity, (np.ndarray, list)) else float(capacity)
+            
+            # 5.3 过载率 = (总负载/容量) - 1（防除零错误）
+            overload_ratio = (real_load / capacity) - 1 if capacity > 1e-6 else 0.0
+            
+            # 添加到step_data（确保都是标量）
+            step_data["transformer_real_load_kw"].append(float(real_load))
+            step_data["transformer_capacity_kw"].append(float(capacity))
+            step_data["transformer_overload_ratio"].append(float(overload_ratio))
+
+        # ========== 6. 空列表兜底（避免后续计算报错） ==========
+        for key in ["ev_remaining_steps", "ev_soc_demand_kwh"]:
+            if not step_data[key]:
+                step_data[key] = [0.0]
+
+        for key in ["transformer_real_load_kw", "transformer_capacity_kw", "transformer_overload_ratio"]:
+            if not step_data[key]:
+                step_data[key] = [0.0]
+
+        return step_data
+    # ==================================================================
+
     def reset(self, seed=None, options=None, **kwargs):
         '''Resets the environment to its initial state'''
+
+        # ===================== 新增：重置终端变量存储 =====================
+        self.scenario_step_data = []
+        # ==================================================================
 
         if seed is None:
             self.seed = np.random.randint(0, 1000000)
@@ -304,34 +442,37 @@ class EV2Gym(gym.Env):
                 if self.config["random_hour"]:
                     self.config['hour'] = random.randint(5, 15)
 
-            self.sim_date = datetime.datetime(2022,
-                                              1,
-                                              1,
-                                              self.config['hour'],
-                                              self.config['minute'],
-                                              ) + datetime.timedelta(days=random.randint(0, int(1.5*365)))
+                self.sim_date = datetime.datetime(2022,
+                                                  1,
+                                                  1,
+                                                  self.config['hour'],
+                                                  self.config['minute'],
+                                                  ) + datetime.timedelta(days=random.randint(0, int(1.5*365)))
 
-            if self.scenario == 'workplace':
-                # dont simulate weekends
-                while self.sim_date.weekday() > 4:
-                    self.sim_date += datetime.timedelta(days=1)
+                if self.scenario == 'workplace':
+                    # dont simulate weekends
+                    while self.sim_date.weekday() > 4:
+                        self.sim_date += datetime.timedelta(days=1)
 
-            if self.config['simulation_days'] == "weekdays":
-                # dont simulate weekends
-                while self.sim_date.weekday() > 4:
-                    self.sim_date += datetime.timedelta(days=1)
-            elif self.config['simulation_days'] == "weekends" and self.scenario != 'workplace':
-                # simulate only weekends
-                while self.sim_date.weekday() < 5:
-                    self.sim_date += datetime.timedelta(days=1)
+                if self.config['simulation_days'] == "weekdays":
+                    # dont simulate weekends
+                    while self.sim_date.weekday() > 4:
+                        self.sim_date += datetime.timedelta(days=1)
+                elif self.config['simulation_days'] == "weekends" and self.scenario != 'workplace':
+                    # simulate only weekends
+                    while self.sim_date.weekday() < 5:
+                        self.sim_date += datetime.timedelta(days=1)
 
         self.sim_starting_date = self.sim_date
-        self.EVs_profiles = load_ev_profiles(self)
-        self.power_setpoints = load_power_setpoints(self)
+        self.EVs_profiles = self._load_ev_profiles(self)
+        self.power_setpoints = self._load_power_setpoints(self)
         self.EVs = []
 
-        self.charge_prices, self.discharge_prices = load_electricity_prices(
-
+        if self.use_generated:
+            from ev2gym.utilities.loaders_gen import update_transformer_data
+            update_transformer_data(self)
+            
+        self.charge_prices, self.discharge_prices = self._load_electricity_prices(
             self)
 
         # print(f'Simulation starting date: {self.sim_date}')
@@ -479,11 +620,17 @@ class EV2Gym(gym.Env):
 
         self._update_power_statistics(self.departing_evs)
 
+        # ===================== 新增：收集当前步终端变量 =====================
+        if self.current_step < self.simulation_length:
+            step_data = self._collect_step_terminal_vars()
+            self.scenario_step_data.append(step_data)
+        # ==================================================================
+
         self.current_step += 1
         self._step_date()
 
         if self.current_step < self.simulation_length:
-            self.charge_power_potential[self.current_step] = calculate_charge_power_potential(
+            self.charge_power_potential[self.current_step] = self._calculate_charge_power_potential(
                 self)
 
         self.current_evs_parked += self.current_ev_arrived - self.current_ev_departed
@@ -538,7 +685,7 @@ class EV2Gym(gym.Env):
                 the simulation might end up in infeasible problem
                 """
 
-            self.stats = get_statistics(self)
+            self.stats = self._get_statistics(self)
 
             self.stats['action_mask'] = action_mask
             self.cost = cost
@@ -606,37 +753,44 @@ class EV2Gym(gym.Env):
         # if not self.lightweight_plots:
         for tr in self.transformers:
             # self.transformer_amps[tr.id, self.current_step] = tr.current_amps
-            self.tr_overload[tr.id,
-                             self.current_step] = tr.get_how_overloaded()
-            self.tr_inflexible_loads[tr.id,
-                                     self.current_step] = tr.inflexible_load[self.current_step]
-            self.tr_solar_power[tr.id,
-                                self.current_step] = tr.solar_power[self.current_step]
+            # 修复：适配任意数组类型的overload计算
+            overload_val = tr.get_how_overloaded() if hasattr(tr, 'get_how_overloaded') else 0
+            overload_val = float(np.mean(overload_val)) if isinstance(overload_val, (np.ndarray, list)) else float(overload_val)
+            self.tr_overload[tr.id, self.current_step] = overload_val
+            
+            # 确保是标量
+            inflex_load = tr.inflexible_load[self.current_step] if isinstance(tr.inflexible_load, (np.ndarray, list)) else tr.inflexible_load
+            inflex_load = float(np.mean(inflex_load)) if isinstance(inflex_load, (np.ndarray, list)) else float(inflex_load)
+            self.tr_inflexible_loads[tr.id, self.current_step] = inflex_load
+            
+            solar_pow = tr.solar_power[self.current_step] if isinstance(tr.solar_power, (np.ndarray, list)) else tr.solar_power
+            solar_pow = float(np.mean(solar_pow)) if isinstance(solar_pow, (np.ndarray, list)) else float(solar_pow)
+            self.tr_solar_power[tr.id, self.current_step] = solar_pow
 
         for cs in self.charging_stations:
-            self.cs_power[cs.id, self.current_step] = cs.current_power_output
-            self.cs_current[cs.id, self.current_step] = cs.current_total_amps
+            self.cs_power[cs.id, self.current_step] = float(cs.current_power_output)
+            self.cs_current[cs.id, self.current_step] = float(cs.current_total_amps)
 
             for port in range(cs.n_ports):
                 if not self.lightweight_plots:
                     self.port_current_signal[port, cs.id,
-                                             self.current_step] = cs.current_signal[port]
+                                             self.current_step] = float(cs.current_signal[port])
                 ev = cs.evs_connected[port]
                 if ev is not None and not self.lightweight_plots:
                     # self.port_power[port, cs.id,
                     #                 self.current_step] = ev.current_energy
                     self.port_current[port, cs.id,
-                                      self.current_step] = ev.actual_current
+                                      self.current_step] = float(ev.actual_current)
 
                     self.port_energy_level[port, cs.id,
-                                           self.current_step] = ev.current_capacity/ev.battery_capacity
+                                           self.current_step] = float(ev.current_capacity/ev.battery_capacity)
 
             for ev in departing_evs:
                 if not self.lightweight_plots:
                     self.port_energy_level[ev.id, ev.location, self.current_step] = \
-                        ev.current_capacity/ev.battery_capacity
+                        float(ev.current_capacity/ev.battery_capacity)
                     self.port_current[ev.id, ev.location,
-                                      self.current_step] = ev.actual_current
+                                      self.current_step] = float(ev.actual_current)
 
     def _step_date(self):
         '''Steps the simulation date by one timestep'''
@@ -644,7 +798,6 @@ class EV2Gym(gym.Env):
             datetime.timedelta(minutes=self.timescale)
 
     def _get_observation(self):
-
         return self.state_function(self)
 
     def set_cost_function(self, cost_function):
@@ -667,3 +820,7 @@ class EV2Gym(gym.Env):
         self.total_reward += reward
 
         return reward
+    
+    def close(self):
+        """新增：环境关闭方法（适配generate_trajectories中的调用）"""
+        pass

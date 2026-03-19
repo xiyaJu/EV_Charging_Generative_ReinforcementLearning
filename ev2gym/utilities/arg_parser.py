@@ -2,12 +2,10 @@ import argparse
 
 def arg_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--env", default="25",
-                        help="the environment on which the agent should be trained ")
     parser.add_argument("--name",type=str, help="name of the experiment")
     parser.add_argument("--render_train", default=False, type=bool,
                         help="Render the training steps (default: False)")
-    parser.add_argument("--render_eval", default=False, type=bool,
+    parser.add_argument("--render_eval", default=True, type=bool,
                         help="Render the evaluation steps (default: False)")
     parser.add_argument("--load_model", default=False, type=bool,
                         help="Load a pretrained model (default: False)")
@@ -30,11 +28,11 @@ def arg_parser():
     parser.add_argument("--hidden_size", nargs=2, default=[256, 256], type=tuple,
                         help="Num. of units of the hidden layers (default: [400, 300]; OpenAI: [64, 64])")    
     parser.add_argument("--wandb", default=False, type=bool,
-                        help="Enable logging to wandb (default: True)")
+                        help="Enable logging to wandb (default: False)")
 
     # Environment specific arguments
     parser.add_argument("--config_file", default="./config_files/PST_V2G_ProfixMax_25.yaml",    
-                        help="Path to the config file (default: config_files/config.yaml)")
+                        help="Path to the config file (default: ./config_files/PST_V2G_ProfixMax_250.yaml)")
     parser.add_argument("--n_test_cycles", default=50, type=int,
                         help="Num. of episodes in the evaluation phases (default: 10; OpenAI: 20)")
 
@@ -47,7 +45,10 @@ def arg_parser():
                         action="store_true",
                         help="Save evaluation replays (default: False)")
                         
-    parser.add_argument("--dataset", default="random_1000", type=str)
+    parser.add_argument("--dataset", default="random", type=str)
     
+    # whether using generated scenarios
+    parser.add_argument("--use_generated", default=False, type=bool,
+                        help="Whether using generated scenarios (default: False)")
 
     return parser.parse_args()

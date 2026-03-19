@@ -178,4 +178,4 @@ results_analysis/data/
 model.lp
 
 *.pkl
-d3rlpy_logs/
+d3rlpy_logs/.DS_Store

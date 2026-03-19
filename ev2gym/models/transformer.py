@@ -1,6 +1,5 @@
 '''
 This file contains the Transformer class which is used to model the transformer in the ev_city environment
-变压器
 '''
 import numpy as np
 import math
@@ -215,6 +214,7 @@ class Transformer():
         '''
         Check that infelxible_loads are lower than the max_power, if not, set them to the max_power
         '''
+
         if env.config['inflexible_loads']['include']:
             mult = env.config['inflexible_loads']['inflexible_loads_capacity_multiplier_mean']
             mult = env.tr_rng.normal(mult, 0.1)

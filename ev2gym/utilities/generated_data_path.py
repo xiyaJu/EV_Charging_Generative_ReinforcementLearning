@@ -1,1 +1,1 @@
-data_path = '/Users/xiya/Documents/nusricq/fyp/DT4EVs-main/ev2gym/data/generated/samples/gen_day_0000.csv'
+data_path = '/Users/xiya/Documents/nusricq/fyp/ordered/generated_mainB.csv'
