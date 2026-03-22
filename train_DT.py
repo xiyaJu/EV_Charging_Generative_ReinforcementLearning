@@ -117,27 +117,49 @@ def experiment(vars):
         traj_lens.append(len(path['observations']))
         returns.append(path['rewards'].sum())
     traj_lens = np.array(traj_lens)
+    all_rewards = np.concatenate([traj['rewards'] for traj in trajectories])
+    print(f"奖励范围: [{all_rewards.min()}, {all_rewards.max()}]")
+    print(f"奖励均值: {all_rewards.mean()}, 标准差: {all_rewards.std()}")
+    print(f"单条轨迹总回报范围: [{min(returns)}, {max(returns)}]")
     # print(trajectories[0])
     # exit()
 
     # Initialize eval_envs from replays
-    eval_replay_path = vars['eval_replay_path']
-    eval_replays = os.listdir(eval_replay_path)
-    eval_envs = []
-    print(f'Loading evaluation replays from {eval_replay_path}')
-    for replay in eval_replays:
-        eval_env = EV2Gym(config_file=config_path,
-                          load_from_replay_path=eval_replay_path + replay,
-                          state_function=state_function,
-                          reward_function=reward_function,
-                          )
+    # eval_replay_path = vars['eval_replay_path']
+    # eval_replays = os.listdir(eval_replay_path)
+    # eval_envs = []
+    # print(f'Loading evaluation replays from {eval_replay_path}')
+    # for replay in eval_replays:
+    #     eval_env = EV2Gym(config_file=config_path,
+    #                       load_from_replay_path=eval_replay_path + replay,
+    #                       state_function=state_function,
+    #                       reward_function=reward_function,
+    #                       )
                 
-        eval_envs.append(eval_env)
+    #     eval_envs.append(eval_env)
         
-        if len(eval_envs) >= vars['num_eval_episodes']:
-            break
+    #     if len(eval_envs) >= vars['num_eval_episodes']:
+    #         break
 
-    print(f'Loaded {len(eval_envs)} evaluation replays')
+    # print(f'Loaded {len(eval_envs)} evaluation replays')
+    eval_replay_path = vars['eval_replay_path']
+    eval_envs = []
+    if os.path.exists(eval_replay_path):
+        eval_replays = os.listdir(eval_replay_path)
+        print(f'Loading evaluation replays from {eval_replay_path}')
+        for replay in eval_replays:
+            eval_env = EV2Gym(config_file=config_path,
+                              load_from_replay_path=eval_replay_path + replay,
+                              state_function=state_function,
+                              reward_function=reward_function,
+                              )
+            eval_envs.append(eval_env)
+            if len(eval_envs) >= vars['num_eval_episodes']:
+                break
+        print(f'Loaded {len(eval_envs)} evaluation replays')
+    else:
+        print(f'No eval replay path found at {eval_replay_path}, skipping evaluation.')
+
 
     # used for input normalization
     states = np.concatenate(states, axis=0)
@@ -148,6 +170,10 @@ def experiment(vars):
     # save state mean and std
     np.save(f'{save_path}/state_mean.npy', state_mean)
     np.save(f'{save_path}/state_std.npy', state_std)
+    np.savetxt(f'{save_path}/state_mean.csv', state_mean.reshape(1, -1), 
+           delimiter=',', header='mean_values', comments='')
+    np.savetxt(f'{save_path}/state_std.csv', state_std.reshape(1, -1), 
+           delimiter=',', header='std_values', comments='')
 
     num_timesteps = sum(traj_lens)
 
@@ -180,12 +206,14 @@ def experiment(vars):
     p_sample = traj_lens[sorted_inds] / sum(traj_lens[sorted_inds])
 
     def get_batch(batch_size=256, max_len=K):
+        # 从筛选后的轨迹中（共 num_trajectories 条）随机选 batch_size 条的索引。按 p_sample 加权采样，长轨迹被选中的概率更高。replace=True 允许重复选取
         batch_inds = np.random.choice(
             np.arange(num_trajectories),
             size=batch_size,
             replace=True,
             p=p_sample,  # reweights so we sample according to timesteps
         )
+        
 
         s, a, r, d, rtg, timesteps, mask, action_mask = [], [], [], [], [], [], [], []
         for i in range(batch_size):
@@ -318,6 +346,10 @@ def experiment(vars):
     )
 
     model = model.to(device=device)
+    
+    if vars.get('resume_model') is not None:
+        model.load_state_dict(torch.load(vars['resume_model'], map_location=device))
+        print(f'Loaded pretrained model from {vars["resume_model"]}')
 
     warmup_steps = vars['warmup_steps']
     optimizer = torch.optim.AdamW(
@@ -433,7 +465,7 @@ if __name__ == '__main__':
     parser.add_argument('--name', type=str, default='1')
     parser.add_argument('--seed', type=int, default=42)
     # trajectory path
-    parser.add_argument('--dataset_path', type=str, default='PST_V2G_ProfixMax_25_random_25_100.pkl.gz')
+    parser.add_argument('--dataset_path', type=str, default='PST_V2G_ProfixMax_25_random_25_10.pkl.gz')
     parser.add_argument('--config_file', type=str, default="PST_V2G_ProfixMax_25.yaml")
     # normal for standard setting, delayed for sparse
     parser.add_argument('--mode', type=str, default='normal')
@@ -468,7 +500,7 @@ if __name__ == '__main__':
     parser.add_argument('--act_GNN_hidden_dim', type=int, default=32)
     parser.add_argument('--num_act_gcn_layers', type=int, default=3)
     parser.add_argument('--gnn_type', type=str, default='GCN')
-
+    parser.add_argument('--resume_model', type=str, default=None,help='Path to a pretrained model to resume training from')
     args = parser.parse_args()
 
     experiment(vars=vars(args))
