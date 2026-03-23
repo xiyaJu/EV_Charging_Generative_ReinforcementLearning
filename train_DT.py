@@ -46,8 +46,8 @@ def experiment(vars):
     np.random.seed(seed)
     torch.manual_seed(seed)
 
-    scale = 1   # 奖励缩放因子（后续RTG归一化用）
-    env_targets = [0]  # evaluation conditioning targets
+    scale = vars.get('scale', None)  # 奖励缩放因子（后续RTG归一化用）
+    env_targets = None  # evaluation conditioning targets
 
 
     config_path = f'./config_files/{vars["config_file"]}'
@@ -77,10 +77,6 @@ def experiment(vars):
     # create folder
     if not os.path.exists(save_path):
         os.makedirs(save_path)
-
-    # save the vars to the save path as yaml
-    with open(f'{save_path}/vars.yaml', 'w') as f:
-        yaml.dump(vars, f)
 
     # ---- local eval/train log files ----
     csv_log_path = os.path.join(save_path, "metrics.csv")
@@ -117,7 +113,35 @@ def experiment(vars):
         traj_lens.append(len(path['observations']))
         returns.append(path['rewards'].sum())
     traj_lens = np.array(traj_lens)
-    all_rewards = np.concatenate([traj['rewards'] for traj in trajectories])
+    returns_arr = np.asarray(returns, dtype=np.float32)
+    all_rewards = np.concatenate([traj['rewards'] for traj in trajectories]).astype(np.float32)
+
+    if scale is None or scale <= 0:
+        rtg_mean_abs = float(np.mean(np.abs(returns_arr)))
+        scale = max(rtg_mean_abs / 10.0, 1.0)
+        scale_source = 'auto(mean(|return|)/10)'
+    else:
+        scale = float(scale)
+        scale_source = 'manual'
+
+    # 对负回报任务来说，最大的 return 才是“最好”的轨迹目标。
+    best_dataset_return = float(np.max(returns_arr))
+    env_targets = [best_dataset_return]
+
+    print(f"scale 来源: {scale_source}")
+    print(f"自动/当前 scale = {scale:.4f}")
+    print(f"scale=1 时RTG范围: [{returns_arr.min():.2f}, {returns_arr.max():.2f}]")
+    print(f"缩放后RTG范围: [{returns_arr.min()/scale:.2f}, {returns_arr.max()/scale:.2f}]")
+    print(f"缩放后单步奖励范围: [{all_rewards.min()/scale:.4f}, {all_rewards.max()/scale:.4f}]")
+    print(f"评估 target return: {best_dataset_return:.2f} (scaled: {best_dataset_return/scale:.4f})")
+
+    vars['scale'] = float(scale)
+    vars['env_targets'] = [float(x) for x in env_targets]
+
+    # 保存解析后的实验配置，便于复现实验。
+    with open(f'{save_path}/vars.yaml', 'w') as f:
+        yaml.dump(vars, f)
+
     print(f"奖励范围: [{all_rewards.min()}, {all_rewards.max()}]")
     print(f"奖励均值: {all_rewards.mean()}, 标准差: {all_rewards.std()}")
     print(f"单条轨迹总回报范围: [{min(returns)}, {max(returns)}]")
@@ -519,6 +543,8 @@ if __name__ == '__main__':
     parser.add_argument('--num_act_gcn_layers', type=int, default=3)
     parser.add_argument('--gnn_type', type=str, default='GCN')
     parser.add_argument('--resume_model', type=str, default=None,help='Path to a pretrained model to resume training from')
+    parser.add_argument('--scale', type=float, default=None,
+                        help='Reward-to-go scaling factor. If omitted, auto-compute from dataset mean absolute return.')
     args = parser.parse_args()
 
     experiment(vars=vars(args))

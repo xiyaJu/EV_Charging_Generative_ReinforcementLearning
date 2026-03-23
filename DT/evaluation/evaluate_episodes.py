@@ -126,21 +126,23 @@ def evaluate_episode_rtg(
     model.eval()
     model.to(device=device)
 
-    if type(state_mean) is np.ndarray:
-        state_mean = torch.from_numpy(state_mean).to(device=device)
-        state_std = torch.from_numpy(state_std).to(device=device)
-
-    # set state_mean and state_std to 0 and 1 if not provided
-
-    state_mean = torch.zeros(state_dim, device=device)
-    state_std = torch.ones(state_dim, device=device)
+    if isinstance(state_mean, np.ndarray):
+        state_mean = torch.from_numpy(state_mean).to(
+            device=device, dtype=torch.float32)
+        state_std = torch.from_numpy(state_std).to(
+            device=device, dtype=torch.float32)
+    else:
+        state_mean = torch.full(
+            (state_dim,), float(state_mean), device=device, dtype=torch.float32)
+        state_std = torch.full(
+            (state_dim,), float(state_std), device=device, dtype=torch.float32)
 
     test_rewards = []
     test_stats = []
 
     # env = test_env
 
-    global_target_return = 0
+    global_target_return = 0.0 if target_return is None else float(target_return)
 
     for test_cycle in tqdm.tqdm(range(len(test_env))):
         env = test_env[test_cycle]
