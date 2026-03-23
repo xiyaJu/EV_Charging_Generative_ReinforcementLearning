@@ -123,7 +123,27 @@ def experiment(vars):
     print(f"单条轨迹总回报范围: [{min(returns)}, {max(returns)}]")
     # print(trajectories[0])
     # exit()
+# ====== 新增：状态和动作的范围 ======
+    all_states = np.concatenate([traj['observations'] for traj in trajectories])
+    all_actions = np.concatenate([traj['actions'] for traj in trajectories])
 
+    print(f"状态范围: [{all_states.min()}, {all_states.max()}]")
+    print(f"状态均值: {all_states.mean()}, 标准差: {all_states.std()}")
+
+    print(f"动作范围: [{all_actions.min()}, {all_actions.max()}]")
+    print(f"动作均值: {all_actions.mean()}, 标准差: {all_actions.std()}")
+
+    # 非零状态值的范围（排除padding的0）
+    nonzero_states = all_states[all_states != 0]
+    if len(nonzero_states) > 0:
+        print(f"非零状态范围: [{nonzero_states.min()}, {nonzero_states.max()}]")
+        print(f"非零状态均值: {nonzero_states.mean()}, 标准差: {nonzero_states.std()}")
+
+    # 非零动作值的范围
+    nonzero_actions = all_actions[all_actions != 0]
+    if len(nonzero_actions) > 0:
+        print(f"非零动作范围: [{nonzero_actions.min()}, {nonzero_actions.max()}]")
+        print(f"非零动作均值: {nonzero_actions.mean()}, 标准差: {nonzero_actions.std()}")
     # Initialize eval_envs from replays
     # eval_replay_path = vars['eval_replay_path']
     # eval_replays = os.listdir(eval_replay_path)
@@ -485,9 +505,7 @@ if __name__ == '__main__':
 
 
     parser.add_argument('--num_eval_episodes', type=int, default=3)
-    parser.add_argument('--eval_replay_path', type=str,
-                        default="./eval_replays/PST_V2G_ProfixMax_25_optimal_25_50/")
-
+    parser.add_argument('--eval_replay_path', type=str, default="./eval_replays/PST_V2G_ProfixMax_25_optimal_25_50/")
     # New parameters
     parser.add_argument('--action_masking',
                         type=bool,
