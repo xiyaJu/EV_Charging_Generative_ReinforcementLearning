@@ -1,1 +1,1 @@
-data_path = '/Users/xiya/Documents/nusricq/fyp/ordered/generated_mainB.csv'
+data_path = 'D://fypReleateFile/EV_Charging_Generate_trajectories/dataset_China_all.csv'

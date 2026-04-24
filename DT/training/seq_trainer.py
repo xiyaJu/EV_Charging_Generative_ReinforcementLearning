@@ -7,7 +7,7 @@ from DT.training.trainer import Trainer
 class SequenceTrainer(Trainer):
 
     def train_step(self):
-        states, actions, rewards, dones, rtg, timesteps, attention_mask, action_mask = self.get_batch(
+        states, actions, rewards, dones, rtg, timesteps, attention_mask, action_mask, graph_states = self.get_batch(
             self.batch_size)
         action_target = torch.clone(actions)
 
@@ -18,7 +18,8 @@ class SequenceTrainer(Trainer):
             rtg[:, :-1],
             timesteps,
             attention_mask=attention_mask,
-            action_mask=action_mask
+            action_mask=action_mask,
+            graph_states=graph_states,
         )
 
         act_dim = action_preds.shape[2]

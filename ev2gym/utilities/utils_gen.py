@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 import datetime
+import pandas as pd
 from typing import List, Dict
 
 from ev2gym.models.ev import EV
@@ -466,6 +467,19 @@ def EV_spawner(env) -> List[EV]:
     arrival_probabilities = np.random.rand(env.number_of_ports,
                                            env.simulation_length)
 
+    if not hasattr(env, 'lambda_data') or env.lambda_data is None:
+        from ev2gym.utilities.generated_data_path import data_path
+        env.lambda_data = pd.read_csv(data_path, usecols=['lambda'])['lambda'].to_numpy()
+
+    from ev2gym.utilities.loaders_gen import get_data_offset
+    start_idx = get_data_offset(env)
+    if len(env.lambda_data) < start_idx + env.simulation_length:
+        print(
+            f"Warning: Lambda data file length {len(env.lambda_data)} is not enough "
+            f"for start_idx {start_idx}. Resetting start_idx to 0."
+        )
+        start_idx = 0
+
     scenario = env.scenario
     user_spawn_multiplier = env.config["spawn_multiplier"]
     time = env.sim_date
@@ -490,26 +504,14 @@ def EV_spawner(env) -> List[EV]:
                 time = time + datetime.timedelta(minutes=env.timescale)
                 continue
             else:
-                # tau = env.df_arrival_week[scenario].iloc[i]
-                from ev2gym.utilities.generated_data_path import data_path
-                import pandas as pd
-                
-                df = pd.read_csv(data_path)
-                tau = df.iloc[i]['lambda']
-                # print(f"week_tau: {tau}")
+                tau = env.lambda_data[start_idx + i]
                 multiplier = 1  # 10
         else:
             if scenario == "workplace":
                 time = time + datetime.timedelta(minutes=env.timescale)
                 continue
             else:
-                # tau = env.df_arrival_weekend[scenario].iloc[i]
-                from ev2gym.utilities.generated_data_path import data_path
-                import pandas as pd
-                
-                df = pd.read_csv(data_path)
-                tau = df.iloc[i]['lambda']
-                # print(f"weekend_tau: {tau}")
+                tau = env.lambda_data[start_idx + i]
 
             if day == 5:
                 multiplier = 1  # 8

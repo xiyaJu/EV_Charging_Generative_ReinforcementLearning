@@ -124,6 +124,20 @@ def sample_target_stress(
     return rng.choice(pool, size=n_days, replace=True).astype(np.float32)
 
 
+def compute_proxy_utility_score(window: np.ndarray) -> float:
+    price = window[:, 0].astype(np.float32)
+    load = window[:, 1].astype(np.float32)
+    lam = window[:, 2].astype(np.float32)
+
+    price_spread = float(np.quantile(price, 0.95) - np.quantile(price, 0.05))
+    load_ramp = float(np.mean(np.abs(np.diff(load)))) if len(load) > 1 else 0.0
+    lambda_ramp = float(np.mean(np.abs(np.diff(lam)))) if len(lam) > 1 else 0.0
+    lambda_peak_ratio = float(np.max(lam) / (np.mean(lam) + 1e-6))
+
+    # Larger price spread creates more flexibility value; smoother load/lambda reduce control difficulty.
+    return price_spread - 0.5 * load_ramp - 0.25 * lambda_ramp - 0.1 * lambda_peak_ratio
+
+
 @torch.no_grad()
 
 def generate_scenario(
@@ -136,6 +150,8 @@ def generate_scenario(
     fixed_stress: float | None = None,
     start_t: int = 0,
     start_day_id: int = 0,
+    utility_mode: str = "none",
+    utility_weight: float = 0.0,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     set_seed(seed)
     rng = np.random.default_rng(seed)
@@ -203,7 +219,18 @@ def generate_scenario(
         scored["target_stress"] = float(target_stress[day_idx])
         scored["candidate_idx"] = np.arange(num_candidates)
         scored["distance_to_target"] = np.abs(scored["stress_score"] - scored["target_stress"])
-        best_idx = int(scored["distance_to_target"].to_numpy().argmin())
+        if utility_mode == "proxy":
+            scored["utility_score"] = np.asarray(
+                [compute_proxy_utility_score(samples_raw[candidate_idx]) for candidate_idx in range(num_candidates)],
+                dtype=np.float32,
+            )
+            utility_values = scored["utility_score"].to_numpy(dtype=np.float32)
+            utility_values = (utility_values - utility_values.mean()) / (utility_values.std() + 1e-6)
+            scored["selection_score"] = -scored["distance_to_target"] + utility_weight * utility_values
+        else:
+            scored["utility_score"] = 0.0
+            scored["selection_score"] = -scored["distance_to_target"]
+        best_idx = int(scored["selection_score"].to_numpy().argmax())
         best_window = samples_raw[best_idx]
         best_meta = scored.iloc[best_idx].to_dict()
         best_meta["scenario"] = scenario

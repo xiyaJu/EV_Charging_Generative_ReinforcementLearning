@@ -50,5 +50,14 @@ def arg_parser():
     # whether using generated scenarios
     parser.add_argument("--use_generated", default=False, type=bool,
                         help="Whether using generated scenarios (default: False)")
+    parser.add_argument("--generated_csv", default=None, type=str,
+                        help="Path to a generated scenario CSV file. If set, overrides generated_data_path.py via env var.")
+    parser.add_argument("--day_list_csv", default=None, type=str,
+                        help="Optional CSV containing a fixed list of simulation datetimes for reproducible train/val/test splits.")
+    parser.add_argument("--tag", default="", type=str,
+                        help="Optional suffix added to saved trajectory/replay artifact names.")
+    parser.add_argument("--save_trajectory_file", default=False,
+                        action="store_true",
+                        help="Also save trajectories when --save_eval_replays is enabled.")
 
     return parser.parse_args()

@@ -6,8 +6,84 @@ import tqdm
 
 from ev2gym.models.ev2gym_env import EV2Gym
 from utils import PST_V2G_ProfitMax_reward, PST_V2G_ProfitMaxGNN_state, PST_V2G_ProfitMax_state
+from utils import graph_data_to_dict
 
 from ev2gym.rl_agent.reward import SquaredTrackingErrorReward, ProfitMax_TrPenalty_UserIncentives, profit_maximization, SimpleReward
+
+
+def _get_state_normalization_tensors(state_mean, state_std, state_dim, device, use_state_norm):
+    if use_state_norm and isinstance(state_mean, np.ndarray):
+        mean_tensor = torch.from_numpy(state_mean).to(device=device, dtype=torch.float32)
+        std_tensor = torch.from_numpy(state_std).to(device=device, dtype=torch.float32)
+        return mean_tensor, std_tensor
+
+    if use_state_norm and torch.is_tensor(state_mean):
+        return (
+            state_mean.to(device=device, dtype=torch.float32),
+            state_std.to(device=device, dtype=torch.float32),
+        )
+
+    return (
+        torch.zeros(state_dim, device=device, dtype=torch.float32),
+        torch.ones(state_dim, device=device, dtype=torch.float32),
+    )
+
+
+def _build_stats_summary(test_stats):
+    keys_to_keep = [
+        'total_reward',
+        'reward_per_cs',
+        'reward_per_cs_step',
+        'total_profits',
+        'total_ev_served',
+        'total_energy_charged',
+        'total_energy_discharged',
+        'average_user_satisfaction',
+        'min_user_satisfaction',
+        'power_tracker_violation',
+        'tracking_error',
+        'energy_tracking_error',
+        'energy_user_satisfaction',
+        'min_energy_user_satisfaction',
+        'total_transformer_overload',
+        'battery_degradation',
+        'battery_degradation_calendar',
+        'battery_degradation_cycling',
+        'total_steps_min_emergency_battery_capacity_violation',
+    ]
+
+    stats = {}
+    for key in test_stats[0].keys():
+        if "opt" in key:
+            key_name = "opt/" + key.split("opt_")[1]
+            if key.split("opt_")[1] not in keys_to_keep:
+                continue
+        else:
+            if key not in keys_to_keep:
+                continue
+            key_name = "test/" + key
+        stats[key_name] = np.mean([test_stats[i][key]
+                                   for i in range(len(test_stats))])
+    return stats
+
+
+def _augment_stats_with_scale_normalization(stats, env):
+    augmented = dict(stats)
+    n_cs = max(int(getattr(env, "cs", 1)), 1)
+    sim_steps = max(int(getattr(env, "simulation_length", 1)), 1)
+    total_reward = float(augmented.get("total_reward", 0.0))
+    augmented["reward_per_cs"] = total_reward / n_cs
+    augmented["reward_per_cs_step"] = total_reward / (n_cs * sim_steps)
+    return augmented
+
+
+def _build_current_action_mask(env, act_dim):
+    action_mask = np.zeros(act_dim, dtype=np.float32)
+    for i, cs in enumerate(env.charging_stations):
+        for j in range(cs.n_ports):
+            if cs.evs_connected[j] is not None:
+                action_mask[i * cs.n_ports + j] = 1.0
+    return action_mask
 
 
 def evaluate_episode(
@@ -21,13 +97,19 @@ def evaluate_episode(
         mode='normal',
         state_mean=0.,
         state_std=1.,
+        use_state_norm=False,
 ):
 
     model.eval()
     model.to(device=device)
 
-    state_mean = torch.from_numpy(state_mean).to(device=device)
-    state_std = torch.from_numpy(state_std).to(device=device)
+    state_mean, state_std = _get_state_normalization_tensors(
+        state_mean=state_mean,
+        state_std=state_std,
+        state_dim=state_dim,
+        device=device,
+        use_state_norm=use_state_norm,
+    )
 
     test_rewards = []
     test_stats = []
@@ -73,38 +155,11 @@ def evaluate_episode(
             episode_length += 1
 
             if done:
-                test_stats.append(stats)
+                test_stats.append(_augment_stats_with_scale_normalization(stats, env))
                 test_rewards.append(episode_return)
                 break
 
-    keys_to_keep = [
-        'total_reward',
-        'total_profits',
-        'total_energy_charged',
-        'total_energy_discharged',
-        'average_user_satisfaction',
-        'min_user_satisfaction',
-        'power_tracker_violation',
-        'total_transformer_overload',
-
-    ]
-
-    stats = {}
-    for key in test_stats[0].keys():
-        if "opt" in key:
-            key_name = "opt/" + key.split("opt_")[1]
-            if key.split("opt_")[1] not in keys_to_keep:
-                continue
-        else:
-            if key not in keys_to_keep:
-                continue
-            key_name = "test/" + key
-        stats[key_name] = np.mean([test_stats[i][key]
-                                   for i in range(len(test_stats))])
-
-    # stats['mean_test_return'] = np.mean(test_rewards)
-
-    return stats  # , episode_length
+    return _build_stats_summary(test_stats)  # , episode_length
 
 
 def evaluate_episode_rtg(
@@ -121,19 +176,19 @@ def evaluate_episode_rtg(
     target_return=None,
     mode='normal',
     n_test_episodes=10,
+    use_state_norm=False,
     **kwargs
 ):
     model.eval()
     model.to(device=device)
 
-    if type(state_mean) is np.ndarray:
-        state_mean = torch.from_numpy(state_mean).to(device=device)
-        state_std = torch.from_numpy(state_std).to(device=device)
-
-    # set state_mean and state_std to 0 and 1 if not provided
-
-    state_mean = torch.zeros(state_dim, device=device)
-    state_std = torch.ones(state_dim, device=device)
+    state_mean, state_std = _get_state_normalization_tensors(
+        state_mean=state_mean,
+        state_std=state_std,
+        state_dim=state_dim,
+        device=device,
+        use_state_norm=use_state_norm,
+    )
 
     test_rewards = []
     test_stats = []
@@ -157,10 +212,12 @@ def evaluate_episode_rtg(
         padded_state[:len(state)] = state
         states = torch.from_numpy(padded_state).reshape(
             1, state_dim).to(device=device, dtype=torch.float32)
+        graph_states = [graph_data_to_dict(PST_V2G_ProfitMaxGNN_state(env))]
             
         actions = torch.zeros((0, act_dim), device=device, dtype=torch.float32)
-        actions_mask = torch.zeros(
-            (1, act_dim), device=device, dtype=torch.float32)
+        initial_action_mask = _build_current_action_mask(env, act_dim)
+        actions_mask = torch.from_numpy(initial_action_mask).to(
+            device=device, dtype=torch.float32).reshape(1, act_dim)
         rewards = torch.zeros(0, device=device, dtype=torch.float32)
 
         ep_return = global_target_return
@@ -185,6 +242,7 @@ def evaluate_episode_rtg(
                 timesteps.to(dtype=torch.long),
                 actions_mask.to(dtype=torch.float32),
                 config=env.config,
+                graph_states=graph_states,
             )
             
             actions[-1] = action
@@ -208,6 +266,7 @@ def evaluate_episode_rtg(
             cur_state = torch.from_numpy(padded_state).to(
                 device=device).reshape(1, state_dim)
             states = torch.cat([states, cur_state], dim=0)
+            graph_states.append(graph_data_to_dict(PST_V2G_ProfitMaxGNN_state(env)))
             rewards[-1] = reward
 
             if mode != 'delayed':
@@ -224,38 +283,11 @@ def evaluate_episode_rtg(
             episode_length += 1
 
             if done:
-                test_stats.append(stats)
+                test_stats.append(_augment_stats_with_scale_normalization(stats, env))
                 test_rewards.append(episode_return)
                 break
 
-    keys_to_keep = [
-        'total_reward',
-        'total_profits',
-        'total_energy_charged',
-        'total_energy_discharged',
-        'average_user_satisfaction',
-        'min_user_satisfaction',
-        'power_tracker_violation',
-        'total_transformer_overload',
-
-    ]
-
-    stats = {}
-    for key in test_stats[0].keys():
-        if "opt" in key:
-            key_name = "opt/" + key.split("opt_")[1]
-            if key.split("opt_")[1] not in keys_to_keep:
-                continue
-        else:
-            if key not in keys_to_keep:
-                continue
-            key_name = "test/" + key
-        stats[key_name] = np.mean([test_stats[i][key]
-                                   for i in range(len(test_stats))])
-
-    # stats['mean_test_return'] = np.mean(test_rewards)
-
-    return stats  # , episode_length
+    return _build_stats_summary(test_stats)  # , episode_length
 
 
 def evaluate_episode_rtg_from_replays(
@@ -293,9 +325,11 @@ def evaluate_episode_rtg_from_replays(
     # note that the latest action and reward will be "padding"
     states = torch.from_numpy(state).reshape(
         1, state_dim).to(device=device, dtype=torch.float32)
+    graph_states = [graph_data_to_dict(PST_V2G_ProfitMaxGNN_state(env))]
     actions = torch.zeros((0, act_dim), device=device, dtype=torch.float32)
-    actions_mask = torch.zeros(
-        (1, act_dim), device=device, dtype=torch.float32)
+    initial_action_mask = _build_current_action_mask(env, act_dim)
+    actions_mask = torch.from_numpy(initial_action_mask).to(
+        device=device, dtype=torch.float32).reshape(1, act_dim)
     rewards = torch.zeros(0, device=device, dtype=torch.float32)
 
     ep_return = global_target_return
@@ -319,6 +353,7 @@ def evaluate_episode_rtg_from_replays(
             target_return.to(dtype=torch.float32),
             timesteps.to(dtype=torch.long),
             actions_mask.to(dtype=torch.float32),
+            graph_states=graph_states,
         )
 
         actions[-1] = action
@@ -333,6 +368,7 @@ def evaluate_episode_rtg_from_replays(
         cur_state = torch.from_numpy(state).to(
             device=device).reshape(1, state_dim)
         states = torch.cat([states, cur_state], dim=0)
+        graph_states.append(graph_data_to_dict(PST_V2G_ProfitMaxGNN_state(env)))
         rewards[-1] = reward
 
         if mode != 'delayed':

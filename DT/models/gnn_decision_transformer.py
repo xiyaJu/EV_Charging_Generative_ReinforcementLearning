@@ -9,11 +9,7 @@ from DT.models.trajectory_gpt2 import GPT2Model
 from transformers import GPTNeoForCausalLM, GPT2Tokenizer
 # from transformers import MambaConfig, MambaForCausalLM, AutoTokenizer
 
-from utils import PST_V2G_ProfitMax_state_to_GNN
-from torch_geometric.data import Data
-from torch_geometric.nn import GCNConv
-from torch_geometric.nn import global_mean_pool
-import torch.nn.functional as F
+from DT.models.graph_components import GraphStateEncoder
 
 
 class GNN_DecisionTransformer(TrajectoryModel):
@@ -67,42 +63,14 @@ class GNN_DecisionTransformer(TrajectoryModel):
         # self.transformer = GPTNeoForCausalLM(gpt_config)
         # self.transformer = MambaForCausalLM(gpt_config)
 
-        # Node-specific embedding layers
-        self.ev_embedding = nn.Linear(fx_node_sizes['ev'], feature_dim)
-        self.cs_embedding = nn.Linear(fx_node_sizes['cs'], feature_dim)
-        self.tr_embedding = nn.Linear(fx_node_sizes['tr'], feature_dim)
-        self.env_embedding = nn.Linear(fx_node_sizes['env'], feature_dim)
-
-        # GCN layers to extract features with a unified edge index
-        self.gcn_conv = GCNConv(feature_dim, GNN_hidden_dim)
-
-        if num_gcn_layers == 3:
-            self.gcn_layers = nn.ModuleList(
-                [GCNConv(GNN_hidden_dim, 2*GNN_hidden_dim),
-                    # GCNConv(2*GNN_hidden_dim, 3*GNN_hidden_dim)])
-                    GCNConv(2*GNN_hidden_dim, hidden_size)])
-            mlp_layer_features = hidden_size
-
-        elif num_gcn_layers == 4:
-            self.gcn_layers = nn.ModuleList([GCNConv(GNN_hidden_dim, 2*GNN_hidden_dim),
-                                             GCNConv(2*GNN_hidden_dim,
-                                                     3*GNN_hidden_dim),
-                                             GCNConv(3*GNN_hidden_dim, hidden_size)])
-            mlp_layer_features = hidden_size
-
-        elif num_gcn_layers == 5:
-            self.gcn_layers = nn.ModuleList([GCNConv(GNN_hidden_dim, 2*GNN_hidden_dim),
-                                             GCNConv(2*GNN_hidden_dim,
-                                                     3*GNN_hidden_dim),
-                                             GCNConv(3*GNN_hidden_dim,
-                                                     4*GNN_hidden_dim),
-                                             GCNConv(4*GNN_hidden_dim,
-                                                     hidden_size)
-                                             ])
-            mlp_layer_features = hidden_size
-        else:
-            raise ValueError(
-                f"Number of GCN layers not supported, use 3, 4, or 5!")
+        self.graph_encoder = GraphStateEncoder(
+            fx_node_sizes=fx_node_sizes,
+            feature_dim=feature_dim,
+            hidden_size=hidden_size,
+            gnn_hidden_dim=GNN_hidden_dim,
+            num_gcn_layers=num_gcn_layers,
+        )
+        mlp_layer_features = hidden_size
 
         # print("hiden size: ", hidden_size,max_ep_len)
         self.embed_timestep = nn.Embedding(max_ep_len, hidden_size)
@@ -117,6 +85,11 @@ class GNN_DecisionTransformer(TrajectoryModel):
         self.predict_action = nn.Sequential(
             *([nn.Linear(hidden_size, self.act_dim)] + ([nn.Tanh()] if action_tanh else [nn.Sigmoid()]))
         )
+        self.predict_ev_action = nn.Sequential(
+            nn.Linear(2 * hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, 1),
+        )
         # self.predict_action = nn.Sequential(
         #     *([nn.Linear(hidden_size, self.act_dim)] + ([nn.Tanh()] if action_tanh else []))
         # )
@@ -127,7 +100,8 @@ class GNN_DecisionTransformer(TrajectoryModel):
     def forward(self, states, actions, rewards, returns_to_go, timesteps,
                 attention_mask=None,
                 action_mask=None,
-                config=None):
+                config=None,
+                graph_states=None):
 
         if config is None:
             config = self.config
@@ -144,67 +118,16 @@ class GNN_DecisionTransformer(TrajectoryModel):
             attention_mask = torch.ones(
                 (batch_size, seq_length), dtype=torch.long)
 
-        # Convert states to NumPy all at once outside the loops
-        states_numpy = states.detach().cpu().numpy()
+        if graph_states is None:
+            states_numpy = states.detach().cpu().numpy()
+            graph_states = [[states_numpy[batch, t] for t in range(seq_length)] for batch in range(batch_size)]
 
-        gnn_states = [
-            [
-                PST_V2G_ProfitMax_state_to_GNN(
-                    states_numpy[batch, t], config)
-                for t in range(states.shape[1])
-            ]
-            for batch in range(states.shape[0])
-        ]
-
-        gnn_states = to_GNN_Batch(gnn_states, device=self.device)
-
-        # GNN forward pass
-        ev_features = gnn_states.ev_features
-        cs_features = gnn_states.cs_features
-        tr_features = gnn_states.tr_features
-        env_features = gnn_states.env_features
-        edge_index = gnn_states.edge_index
-
-        total_nodes = ev_features.shape[0] + cs_features.shape[0] + \
-            tr_features.shape[0] + env_features.shape[0]
-
-        embedded_x = torch.zeros(total_nodes,
-                                 self.feature_dim,
-                                 device=self.device).float()
-
-        # Apply embeddings to the corresponding segments
-        if len(gnn_states.ev_indexes) != 0:
-            embedded_x[gnn_states.ev_indexes] = self.ev_embedding(ev_features)
-            embedded_x[gnn_states.cs_indexes] = self.cs_embedding(cs_features)
-            embedded_x[gnn_states.tr_indexes] = self.tr_embedding(tr_features)
-
-        embedded_x[gnn_states.env_indexes] = self.env_embedding(env_features)
-
-        embedded_x = embedded_x.reshape(-1, self.feature_dim)
-        embedded_x = F.relu(embedded_x)
-
-        # Apply GCN layers with the unified edge index
-        x_gnn = self.gcn_conv(embedded_x, edge_index)
-        x_gnn = F.relu(x_gnn)
-
-        for layer in self.gcn_layers:
-            x_gnn = layer(x_gnn, edge_index)
-            if layer != self.gcn_layers[-1]:
-                x_gnn = F.relu(x_gnn)
-
-        # make batch sample mask
-        sample_node_length = gnn_states.sample_node_length
-        batch = np.repeat(np.arange(len(sample_node_length)),
-                          sample_node_length)
-        batch = torch.from_numpy(batch).to(device=self.device)
-
-        # Graph Embedding
-        pooled_embedding = global_mean_pool(x_gnn, batch=batch)
-
-        # print(f"Pooled embedding shape: {pooled_embedding.shape}")
-        # reshape to (batch_size, seq_length, hidden_size)
-        pooled_embedding = pooled_embedding.reshape(
-            batch_size, seq_length, -1)
+        pooled_embedding, x_gnn, gnn_states = self.graph_encoder(
+            graph_states,
+            config=config,
+            batch_size=batch_size,
+            seq_length=seq_length,
+        )
         # embed each modality with a different head
         state_embeddings = self.embed_state(pooled_embedding)
         # print(f"State embeddings shape: {state_embeddings.shape}")
@@ -248,23 +171,36 @@ class GNN_DecisionTransformer(TrajectoryModel):
         # predict next state given state and action
         state_preds = self.predict_state(x[:, 2])
         # predict next action given state
-        ev_node_features = x_gnn[gnn_states.ev_indexes].permute(1, 0)
-        action_preds_t = torch.zeros((batch_size, seq_length, self.act_dim),
-                                     device=self.device)
+        decision_tokens = x[:, 1].reshape(batch_size * seq_length, self.hidden_size)
+        sample_action_preds = []
+        ev_node_cursor = 0
+        flat_sample_index = 0
+        for _ in range(batch_size):
+            for _ in range(seq_length):
+                num_evs = gnn_states.ev_indexes_node_length[flat_sample_index]
+                sample_action_mapper = gnn_states.action_mapper[ev_node_cursor: ev_node_cursor + num_evs]
+                sample_action = torch.zeros(
+                    self.act_dim,
+                    device=decision_tokens.device,
+                    dtype=decision_tokens.dtype,
+                )
+                if num_evs > 0:
+                    sample_ev_node_indexes = gnn_states.ev_indexes[ev_node_cursor: ev_node_cursor + num_evs]
+                    sample_ev_embeddings = x_gnn[sample_ev_node_indexes]
+                    repeated_token = decision_tokens[flat_sample_index].unsqueeze(0).expand(num_evs, -1)
+                    ev_action_logits = self.predict_ev_action(
+                        torch.cat([sample_ev_embeddings, repeated_token], dim=-1)
+                    ).squeeze(-1)
+                    sample_action = sample_action.scatter(0, sample_action_mapper, ev_action_logits)
+                sample_action_preds.append(sample_action)
+                ev_node_cursor += num_evs
+                flat_sample_index += 1
 
-        counter = 0
-        node_counter = 0
-        for i in range(batch_size):
-            for k in range(seq_length):
-                action_mapper = gnn_states.action_mapper[
-                    node_counter: node_counter + gnn_states.ev_indexes_node_length[counter]]
-
-                action_decoder = x[:, 1][i, k,:].unsqueeze(0)
-                action_preds_t[i, k, action_mapper] = torch.matmul(action_decoder,ev_node_features[:,
-                        node_counter: node_counter + gnn_states.ev_indexes_node_length[counter]])
-
-                node_counter += gnn_states.ev_indexes_node_length[counter]
-                counter += 1
+        action_preds_t = torch.stack(sample_action_preds, dim=0).reshape(
+            batch_size, seq_length, self.act_dim
+        )
+        # Keep a valid gradient path even when a sampled batch contains no active EV nodes.
+        action_preds_t = action_preds_t + 0.0 * decision_tokens.sum()
                 
         # pass through tanh to get action values between -1 and 1
         # action_preds_t = self.predict_action(action_preds_t)
@@ -279,6 +215,7 @@ class GNN_DecisionTransformer(TrajectoryModel):
     def get_action(self, states, actions, rewards, returns_to_go, timesteps,
                    action_mask,
                    config=None,
+                   graph_states=None,
                    **kwargs):
         # we don't care about the past rewards in this model
         states = states.reshape(1, -1, self.state_dim)
@@ -295,6 +232,8 @@ class GNN_DecisionTransformer(TrajectoryModel):
             returns_to_go = returns_to_go[:, -self.max_length:]
             timesteps = timesteps[:, -self.max_length:]
             action_mask = action_mask[:, -self.max_length:]
+            if graph_states is not None:
+                graph_states = list(graph_states)[-self.max_length:]
 
             # pad all tokens to sequence length
             attention_mask = torch.cat(
@@ -326,97 +265,14 @@ class GNN_DecisionTransformer(TrajectoryModel):
                 [torch.zeros((action_mask.shape[0], self.max_length -
                              action_mask.shape[1], self.act_dim), device=action_mask.device), action_mask],
                 dim=1).to(dtype=torch.float32)
+            if graph_states is not None:
+                graph_states = [None] * (self.max_length - len(graph_states)) + list(graph_states)
         else:
             attention_mask = None
 
         _, action_preds, return_preds = self.forward(
             states, actions, rewards, returns_to_go, timesteps, attention_mask=attention_mask,
-            action_mask=action_mask, config=config, **kwargs)
+            action_mask=action_mask, config=config, graph_states=graph_states, **kwargs)
 
         return action_preds[0, -1]
-
-
-def to_GNN_Batch(state_batch, device=None):
-    # flatten the batch from list of lists of states to a list of states
-    states = [state for sublist in state_batch for state in sublist]
-    # print(f"States: {states}")
-    # print(f"States length: {len(states)}")
-    l = len(states)
-
-    edge_index = []
-    ev_indexes = np.array([])
-    cs_indexes = np.array([])
-    tr_indexes = np.array([])
-    env_indexes = np.array([])
-    action_mapper = np.array([])
-
-    edge_counter = 0
-    node_counter = 0
-
-    ev_features = np.concatenate(
-        [states[i].ev_features for i in range(l)], axis=0)
-    cs_features = np.concatenate(
-        [states[i].cs_features for i in range(l)], axis=0)
-    tr_features = np.concatenate(
-        [states[i].tr_features for i in range(l)], axis=0)
-    env_features = np.concatenate(
-        [states[i].env_features for i in range(l)], axis=0)
-    node_types = np.concatenate(
-        [states[i].node_types for i in range(l)], axis=0)
-    action_mapper = np.concatenate(
-        [states[i].action_mapper for i in range(l)], axis=0)
-
-    sample_node_length = [len(states[i].node_types) for i in range(l)]
-    ev_indexes_node_length = [len(states[i].ev_indexes) for i in range(l)]
-
-    for i in range(l):
-        edge_index.append(states[i].edge_index + edge_counter)
-        ev_indexes = np.concatenate(
-            [ev_indexes, states[i].ev_indexes + node_counter], axis=0)
-        cs_indexes = np.concatenate(
-            [cs_indexes, states[i].cs_indexes + node_counter], axis=0)
-        tr_indexes = np.concatenate(
-            [tr_indexes, states[i].tr_indexes + node_counter], axis=0)
-        env_indexes = np.concatenate(
-            [env_indexes, states[i].env_indexes + node_counter], axis=0)
-
-        node_counter += len(states[i].node_types)
-        if states[i].edge_index.shape[1] > 0:
-            edge_counter += np.max(states[i].edge_index)
-        else:
-            edge_counter += 1
-
-    edge_index = np.concatenate(edge_index, axis=1)
-
-    state_batch = Data(edge_index=torch.from_numpy(edge_index).to(device),
-                       ev_features=torch.from_numpy(
-        ev_features).to(device).float(),
-        cs_features=torch.from_numpy(
-        cs_features).to(device).float(),
-        tr_features=torch.from_numpy(
-        tr_features).to(device).float(),
-        env_features=torch.from_numpy(
-        env_features).to(device).float(),
-        node_types=torch.from_numpy(
-        node_types).to(device).float(),
-        sample_node_length=sample_node_length,
-        ev_indexes_node_length=ev_indexes_node_length,
-        action_mapper=action_mapper,
-        ev_indexes=ev_indexes,
-        cs_indexes=cs_indexes,
-        tr_indexes=tr_indexes,
-        env_indexes=env_indexes)
-
-    # print(f"State batch: {state_batch}")
-    # print(f"edge_index shape: {state_batch.edge_index.shape}")
-    # print(f"ev_features shape: {state_batch.ev_features.shape}")
-    # print(f"cs_features shape: {state_batch.cs_features.shape}")
-    # print(f"tr_features shape: {state_batch.tr_features.shape}")
-    # print(f"env_features shape: {state_batch.env_features.shape}")
-    # print(f"node_types shape: {state_batch.node_types.shape}")
-    # print(f"sample_node_length shape: {state_batch.sample_node_length}")
-    # print(f"ev_indexes shape: {state_batch.ev_indexes.shape}")
-    # print(f"cs_indexes shape: {state_batch.cs_indexes.shape}")
-    # print(f"tr_indexes shape: {state_batch.tr_indexes.shape}")
-
-    return state_batch
+

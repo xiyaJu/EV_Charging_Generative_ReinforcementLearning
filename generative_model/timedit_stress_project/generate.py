@@ -21,6 +21,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--start-t", type=int, default=0)
     parser.add_argument("--start-day-id", type=int, default=0)
     parser.add_argument("--device", type=str, default=None)
+    parser.add_argument("--utility-mode", type=str, choices=["none", "proxy"], default="none")
+    parser.add_argument("--utility-weight", type=float, default=0.0)
     return parser.parse_args()
 
 
@@ -53,6 +55,8 @@ def main() -> None:
         fixed_stress=args.fixed_stress,
         start_t=args.start_t,
         start_day_id=args.start_day_id,
+        utility_mode=args.utility_mode,
+        utility_weight=args.utility_weight,
     )
     out_df.to_csv(output_path, index=False)
     meta_df.to_csv(metadata_path, index=False)

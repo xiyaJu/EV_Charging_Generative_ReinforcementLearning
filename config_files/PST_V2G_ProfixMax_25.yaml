@@ -4,7 +4,7 @@
 # Simulation Parameters
 ##############################################################################
 timescale: 15 # in minutes per step
-simulation_length: 300 #90 # in steps per simulation
+simulation_length: 96 #90 # in steps per simulation
 
 ##############################################################################
 # Date and Time
@@ -22,7 +22,7 @@ hour: 5 # Simulation starting hour (24 hour format)
 minute: 0 # Simulation starting minute (0-59)
 
 # Simulate weekdays, weekends, or both
-simulation_days: weekdays # weekdays, weekends, or both
+simulation_days: both # weekdays, weekends, or both
 
 # EV Spawn Behavior
 scenario: private # public, private, or workplace

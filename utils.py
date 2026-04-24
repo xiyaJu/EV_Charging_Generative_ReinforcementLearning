@@ -3,6 +3,44 @@ import numpy as np
 from torch_geometric.data import Data
 import math
 
+
+def graph_data_to_dict(graph_data):
+    if graph_data is None:
+        return None
+    return {
+        "ev_features": np.asarray(graph_data.ev_features, dtype=np.float32),
+        "cs_features": np.asarray(graph_data.cs_features, dtype=np.float32),
+        "tr_features": np.asarray(graph_data.tr_features, dtype=np.float32),
+        "env_features": np.asarray(graph_data.env_features, dtype=np.float32),
+        "edge_index": np.asarray(graph_data.edge_index, dtype=np.int64),
+        "node_types": np.asarray(graph_data.node_types, dtype=np.int64),
+        "sample_node_length": list(graph_data.sample_node_length),
+        "action_mapper": np.asarray(graph_data.action_mapper, dtype=np.int64),
+        "ev_indexes": np.asarray(graph_data.ev_indexes, dtype=np.int64),
+        "cs_indexes": np.asarray(graph_data.cs_indexes, dtype=np.int64),
+        "tr_indexes": np.asarray(graph_data.tr_indexes, dtype=np.int64),
+        "env_indexes": np.asarray(graph_data.env_indexes, dtype=np.int64),
+    }
+
+
+def graph_dict_to_data(graph_dict):
+    if graph_dict is None:
+        return None
+    return Data(
+        ev_features=np.asarray(graph_dict["ev_features"], dtype=np.float32),
+        cs_features=np.asarray(graph_dict["cs_features"], dtype=np.float32),
+        tr_features=np.asarray(graph_dict["tr_features"], dtype=np.float32),
+        env_features=np.asarray(graph_dict["env_features"], dtype=np.float32),
+        edge_index=np.asarray(graph_dict["edge_index"], dtype=np.int64),
+        node_types=np.asarray(graph_dict["node_types"], dtype=np.int64),
+        sample_node_length=list(graph_dict.get("sample_node_length", [])),
+        action_mapper=np.asarray(graph_dict["action_mapper"], dtype=np.int64),
+        ev_indexes=np.asarray(graph_dict["ev_indexes"], dtype=np.int64),
+        cs_indexes=np.asarray(graph_dict["cs_indexes"], dtype=np.int64),
+        tr_indexes=np.asarray(graph_dict["tr_indexes"], dtype=np.int64),
+        env_indexes=np.asarray(graph_dict["env_indexes"], dtype=np.int64),
+    )
+
 def PST_V2G_ProfitMax_reward(env, total_costs, user_satisfaction_list, *args):
     
     reward = total_costs
@@ -156,7 +194,7 @@ def PST_V2G_ProfitMaxGNN_state(env, *args):
             registered_CS = False
 
             if cs.connected_transformer == tr.id:
-                for EV in cs.evs_connected:
+                for port_i, EV in enumerate(cs.evs_connected):
                     if EV is not None:
 
                         if not registered_CS:
@@ -230,8 +268,8 @@ def PST_V2G_ProfitMaxGNN_state(env, *args):
 
                         node_types.append(3)
                         action_mapper.append(
-                            mapper[f'Tr_{tr.id}_CS_{cs.id}_EV_{EV.id}'])
-                        node_names.append(f'Tr_{tr.id}_CS_{cs.id}_EV_{EV.id}')
+                            mapper[f'Tr_{tr.id}_CS_{cs.id}_EV_{port_i}'])
+                        node_names.append(f'Tr_{tr.id}_CS_{cs.id}_EV_{port_i}')
                         ev_node_index = len(node_names)-1
 
                         edge_index_from.append(cs_node_index)
